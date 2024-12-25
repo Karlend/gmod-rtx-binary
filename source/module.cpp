@@ -21,6 +21,12 @@ remix::Interface* g_remix = nullptr;
 
 using namespace GarrysMod::Lua;
 
+static int RenderOpaqueChunksLua(lua_State* L)
+{
+    RTXMeshManager::Instance().RenderOpaqueChunks();
+    return 0;
+}
+
 LUA_FUNCTION(CreateRTXLight) {
     try {
         if (!g_remix) {
@@ -181,6 +187,17 @@ void* FindD3D9Device() {
 }
 
 GMOD_MODULE_OPEN() { 
+    Msg("[RTX Mesh] Module loading...\n");
+
+    // Initialize RTX Mesh Manager
+    RTXMeshManager::Instance().RegisterLuaFunctions(LUA);
+
+    // Add RenderOpaqueChunks function
+    LUA->PushSpecial(SPECIAL_GLOB);
+    LUA->PushCFunction(RenderOpaqueChunksLua);
+    LUA->SetField(-2, "RenderOpaqueChunks");
+    LUA->Pop();
+    
     try {
         Msg("[RTX Remix Fixes 2] - Module loaded!\n"); 
 
@@ -226,9 +243,6 @@ GMOD_MODULE_OPEN() {
             LUA->SetField(-2, "DrawRTXLights");
         LUA->Pop();
 
-        // Register mesh optimization functions
-        RTXMeshManager::RegisterLuaFunctions(LUA);
-    
         return 0;
     }
     catch (...) {
