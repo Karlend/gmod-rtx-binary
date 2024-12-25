@@ -1,7 +1,5 @@
--- addon/lua/autorun/cl_rtx_meshes.lua
+-- addon/lua/autorun/client/cl_rtx_meshes.lua
 if not CLIENT then return end
-
-print("[RTX Mesh] Script loading...")
 
 local function InitializeMeshSystem()
     if not EnableCustomRendering then
@@ -14,11 +12,10 @@ local function InitializeMeshSystem()
     -- Create ConVars
     local rtx_force_render = CreateClientConVar("rtx_force_render", "1", true, false)
     
-    -- Hook into rendering
+    -- Hook into rendering - change to RenderMapGeometry
     hook.Add("PreDrawOpaqueRenderables", "RTXMeshSystem", function()
         if rtx_force_render:GetBool() then
-            print("[RTX Mesh] Rendering frame...") -- Debug print
-            RenderOpaqueChunks()
+            RenderMapGeometry()  -- New function that handles both passes
             return true
         end
     end)
