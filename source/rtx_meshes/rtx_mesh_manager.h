@@ -27,6 +27,7 @@ private:
         Vector pos;
         Vector normal;
         Vector2D uv;
+        unsigned char color[4];
     };
 
     struct ChunkKey {
@@ -48,9 +49,10 @@ private:
 
     struct MeshChunk {
         std::vector<Vertex> vertices;
+        std::vector<unsigned short> indices;
         IMaterial* material;
-        bool isTranslucent;
     };
+
 
     // Use ChunkKeyHash in unordered_map
     std::unordered_map<ChunkKey, std::vector<MeshChunk>, ChunkKeyHash> m_opaqueChunks;

@@ -189,6 +189,34 @@ void* FindD3D9Device() {
 GMOD_MODULE_OPEN() { 
     Msg("[RTX Mesh] Module loading...\n");
 
+    // Get the MaterialSystem interface
+    CreateInterfaceFn materialSystemFactory = Sys_GetFactory("materialsystem.dll");
+    if (!materialSystemFactory) {
+        Error("[RTX Mesh] Failed to get materialsystem factory\n");
+        return 1;
+    }
+
+    materials = (IMaterialSystem*)materialSystemFactory(MATERIAL_SYSTEM_INTERFACE_VERSION, NULL);
+    if (!materials) {
+        Error("[RTX Mesh] Failed to get IMaterialSystem interface\n");
+        return 1;
+    }
+
+    // Get the engine interface
+    CreateInterfaceFn engineFactory = Sys_GetFactory("engine.dll");
+    if (!engineFactory) {
+        Error("[RTX Mesh] Failed to get engine factory\n");
+        return 1;
+    }
+
+    engine = (IVEngineClient*)engineFactory(VENGINE_CLIENT_INTERFACE_VERSION, NULL);
+    if (!engine) {
+        Error("[RTX Mesh] Failed to get IVEngineClient interface\n");
+        return 1;
+    }
+
+    Msg("[RTX Mesh] Got interfaces: MaterialSystem=%p Engine=%p\n", materials, engine);
+
     // Initialize RTX Mesh Manager
     RTXMeshManager::Instance().RegisterLuaFunctions(LUA);
 
@@ -252,6 +280,14 @@ GMOD_MODULE_OPEN() {
 }
 
 GMOD_MODULE_CLOSE() {
+    Msg("[RTX Mesh] Module unloading...\n");
+    
+    // Reset interfaces
+    materials = nullptr;
+    engine = nullptr;
+    
+    return 0;
+    
     try {
         Msg("[RTX] Shutting down module...\n");
         

@@ -4,7 +4,6 @@
 #include "materialsystem/imaterialsystem.h"
 #include "materialsystem/imesh.h"
 #include "cdll_int.h"
-#include "meshutils.h"
 
 static int RebuildMeshesLua(lua_State* L)
 {
@@ -24,10 +23,34 @@ RTXMeshManager& RTXMeshManager::Instance() {
 void RTXMeshManager::Initialize() {
     if (m_isEnabled) return;
     
+    Msg("[RTX Mesh] Initialize called\n");
+
+    // Validate interfaces
+    if (!materials) {
+        Warning("[RTX Mesh] Cannot initialize - MaterialSystem interface not available\n");
+        return;
+    }
+
+    // Verify we can get a render context
+    IMatRenderContext* pRenderContext = materials->GetRenderContext();
+    if (!pRenderContext) {
+        Warning("[RTX Mesh] Cannot initialize - Failed to get render context\n");
+        return;
+    }
+
+    // Test creating a mesh
+    IMesh* pTestMesh = pRenderContext->GetDynamicMesh();
+    if (!pTestMesh) {
+        Warning("[RTX Mesh] Cannot initialize - Failed to create test mesh\n");
+        return;
+    }
+
+    Msg("[RTX Mesh] Successfully validated interfaces and mesh creation\n");
+    
     m_isEnabled = true;
     RebuildMeshes();
     
-    Msg("[RTX Mesh Manager] Initialized\n");
+    Msg("[RTX Mesh] Initialized with %d chunks\n", m_opaqueChunks.size());
 }
 
 void RTXMeshManager::Shutdown() {
@@ -50,66 +73,69 @@ void RTXMeshManager::RebuildMeshes() {
 }
 
 void RTXMeshManager::ProcessMapGeometry() {
+    if (!materials) {
+        Warning("[RTX Mesh] Cannot process geometry - MaterialSystem interface not available\n");
+        return;
+    }
+
     IMatRenderContext* pRenderContext = materials->GetRenderContext();
     if (!pRenderContext) {
-        Warning("[RTX Mesh Manager] Cannot get render context\n");
+        Warning("[RTX Mesh] Cannot get render context\n");
         return;
     }
 
-    Msg("[RTX Mesh Manager] Beginning map geometry processing...\n");
-    
-    // Create mesh for collecting geometry
-    IMesh* pMesh = pRenderContext->GetDynamicMesh(true);
-    if (!pMesh) {
-        Warning("[RTX Mesh Manager] Failed to create dynamic mesh\n");
+    // Create a basic material for testing
+    IMaterial* testMaterial = materials->FindMaterial("debug/debugvertexcolor", TEXTURE_GROUP_MODEL);
+    if (!testMaterial) {
+        Warning("[RTX Mesh] Failed to find test material\n");
         return;
     }
 
-    // Begin mesh building
-    CMeshBuilder meshBuilder;
-    meshBuilder.Begin(pMesh, MATERIAL_TRIANGLES, 1024); // Start with reasonable size
-
-    size_t totalVertices = 0;
-    size_t totalFaces = 0;
-
-    // Process geometry in chunks
-    while (meshBuilder.VertexCount() < 1024) { // Use fixed max vertex count
-        
-        // Add vertices to current chunk
-        meshBuilder.Position3f(0, 0, 0);
-        meshBuilder.Normal3f(0, 1, 0);
-        meshBuilder.Color4ub(255, 255, 255, 255);
-        meshBuilder.TexCoord2f(0, 0, 0);
-        meshBuilder.AdvanceVertex();
-
-        totalVertices++;
-    }
-
-    meshBuilder.End();
+    Msg("[RTX Mesh] Beginning map geometry processing...\n");
     
-    // Store chunk
+    // For testing, create a simple quad
     MeshChunk chunk;
-    chunk.vertices.resize(totalVertices);
-    for (size_t i = 0; i < totalVertices; i++) {
-        // Copy vertex data from mesh
-        const float* pos = meshBuilder.Position();
-        const float* norm = meshBuilder.Normal();
-        unsigned int color = meshBuilder.Color();
-        const float* texcoord = meshBuilder.TexCoord(0);
+    chunk.vertices.resize(4);
+    chunk.material = testMaterial;
 
-        chunk.vertices[i].pos = Vector(pos[0], pos[1], pos[2]); 
-        chunk.vertices[i].normal = Vector(norm[0], norm[1], norm[2]);
-        // etc...
-
-        meshBuilder.SelectVertex(i);
+    // Get player position for positioning the quad
+    Vector playerPos(0, 0, 0);
+    if (engine && engine->IsInGame()) {
+        playerPos = engine->GetViewAngles();
+        playerPos.z += 64; // Place slightly above eye level
     }
 
-    // Add to appropriate chunk map
+    // Create a quad facing the player
+    float size = 32.0f; // Smaller size for testing
+    chunk.vertices[0].pos = playerPos + Vector(-size, -size, 0);
+    chunk.vertices[1].pos = playerPos + Vector( size, -size, 0);
+    chunk.vertices[2].pos = playerPos + Vector( size,  size, 0);
+    chunk.vertices[3].pos = playerPos + Vector(-size,  size, 0);
+
+    // Set texture coordinates
+    chunk.vertices[0].uv = Vector2D(0, 0);
+    chunk.vertices[1].uv = Vector2D(1, 0);
+    chunk.vertices[2].uv = Vector2D(1, 1);
+    chunk.vertices[3].uv = Vector2D(0, 1);
+
+    // Set normals and colors - make it bright red for visibility
+    for (auto& vert : chunk.vertices) {
+        vert.normal = Vector(0, 0, 1);
+        vert.color[0] = 255;  // R
+        vert.color[1] = 0;    // G
+        vert.color[2] = 0;    // B
+        vert.color[3] = 255;  // A
+    }
+
+    // Add indices for two triangles
+    chunk.indices = { 0, 1, 2, 0, 2, 3 };
+
+    // Add to chunks
     ChunkKey key = GetChunkKey(Vector(0,0,0));
     m_opaqueChunks[key].push_back(chunk);
 
-    Msg("[RTX Mesh Manager] Processed %d faces with %d vertices\n", 
-        totalFaces, totalVertices);
+    Msg("[RTX Mesh] Created test quad with %d vertices and %d indices\n", 
+        chunk.vertices.size(), chunk.indices.size());
 }
 
 RTXMeshManager::ChunkKey RTXMeshManager::GetChunkKey(const Vector& pos) const {
@@ -121,10 +147,20 @@ RTXMeshManager::ChunkKey RTXMeshManager::GetChunkKey(const Vector& pos) const {
 }
 
 void RTXMeshManager::RenderOpaqueChunks() {
-    if (!m_isEnabled || !materials) return;
+    if (!m_isEnabled || !materials) {
+        Warning("[RTX Mesh] RenderOpaqueChunks called but system not ready (enabled: %d, materials: %p)\n", 
+            m_isEnabled, materials);
+        return;
+    }
 
     IMatRenderContext* pRenderContext = materials->GetRenderContext();
-    if (!pRenderContext) return;
+    if (!pRenderContext) {
+        Warning("[RTX Mesh] Failed to get render context\n");
+        return;
+    }
+
+    int chunksRendered = 0;
+    int verticesRendered = 0;
 
     for (const auto& chunkPair : m_opaqueChunks) {
         const auto& chunks = chunkPair.second;
@@ -132,23 +168,45 @@ void RTXMeshManager::RenderOpaqueChunks() {
         for (const auto& chunk : chunks) {
             if (chunk.vertices.empty()) continue;
             
-            IMesh* pMesh = pRenderContext->GetDynamicMesh();
-            if (!pMesh) continue;
+            // Bind the material
+            if (!chunk.material) {
+                Warning("[RTX Mesh] Chunk has no material\n");
+                continue;
+            }
+            pRenderContext->Bind(chunk.material);
+            
+            IMesh* pMesh = pRenderContext->GetDynamicMesh(true);
+            if (!pMesh) {
+                Warning("[RTX Mesh] Failed to get dynamic mesh\n");
+                continue;
+            }
 
             CMeshBuilder meshBuilder;
-            meshBuilder.Begin(pMesh, MATERIAL_TRIANGLES, chunk.vertices.size());
+            meshBuilder.Begin(pMesh, MATERIAL_TRIANGLES, chunk.vertices.size(), chunk.indices.size());
 
+            // Add vertices
             for (const auto& vertex : chunk.vertices) {
                 meshBuilder.Position3f(vertex.pos.x, vertex.pos.y, vertex.pos.z);
                 meshBuilder.Normal3f(vertex.normal.x, vertex.normal.y, vertex.normal.z);
-                // etc...
+                meshBuilder.Color4ub(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]);
+                meshBuilder.TexCoord2f(0, vertex.uv.x, vertex.uv.y);
                 meshBuilder.AdvanceVertex();
+                verticesRendered++;
+            }
+
+            // Add indices
+            for (unsigned short index : chunk.indices) {
+                meshBuilder.Index(index);
+                meshBuilder.AdvanceIndex();
             }
 
             meshBuilder.End();
             pMesh->Draw();
+            chunksRendered++;
         }
     }
+
+    Msg("[RTX Mesh] Rendered %d chunks with %d vertices\n", chunksRendered, verticesRendered);
 }
 
 // Lua interface functions
@@ -162,11 +220,6 @@ LUA_FUNCTION(EnableCustomRendering) {
         manager.Shutdown();
     }
     
-    return 0;
-}
-
-LUA_FUNCTION(RebuildMeshes) {
-    RTXMeshManager::Instance().RebuildMeshes();
     return 0;
 }
 
