@@ -8,6 +8,7 @@
 #include <Windows.h>
 #include <d3d9.h>
 #include "rtx_lights/rtx_light_manager.h"
+#include "rtx_meshes/rtx_mesh_manager.h"
 
 
 #ifdef GMOD_MAIN
@@ -225,6 +226,9 @@ GMOD_MODULE_OPEN() {
             LUA->SetField(-2, "DrawRTXLights");
         LUA->Pop();
 
+        // Register mesh optimization functions
+        RTXMeshManager::RegisterLuaFunctions(LUA);
+    
         return 0;
     }
     catch (...) {
