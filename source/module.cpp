@@ -9,12 +9,12 @@
 #include <d3d9.h>
 #include "rtx_lights/rtx_light_manager.h"
 #include "shader_fixes/shader_hooks.h"
+#include "fvf_compat/material_converter.h"
+#include "utils/interfaces.h"
 
 #ifdef GMOD_MAIN
-extern IMaterialSystem* materials = NULL;
 #endif
 
-extern IVEngineClient* engine = NULL;
 // extern IShaderAPI* g_pShaderAPI = NULL;
 remix::Interface* g_remix = nullptr;
 
@@ -183,52 +183,137 @@ GMOD_MODULE_OPEN() {
     try {
         Msg("[RTX Remix Fixes 2] - Module loaded!\n"); 
 
-        // Initialize shader protection
-        ShaderAPIHooks::Instance().Initialize();
+        // Get the engine factory
+        CreateInterfaceFn engineFactory = Sys_GetFactory("engine.dll");
+        if (!engineFactory) {
+            Error("[Interface Debug] Failed to get engine factory\n");
+            return 0;
+        }
+        Msg("[Interface Debug] Got engine factory at %p\n", engineFactory);
 
-        // Find Source's D3D9 device
-        auto sourceDevice = static_cast<IDirect3DDevice9Ex*>(FindD3D9Device());
-        if (!sourceDevice) {
-            LUA->ThrowError("[RTX] Failed to find D3D9 device");
+        // Get the material system factory
+        CreateInterfaceFn materialSystemFactory = Sys_GetFactory("materialsystem.dll");
+        if (!materialSystemFactory) {
+            Error("[Interface Debug] Failed to get material system factory\n");
+            return 0;
+        }
+        Msg("[Interface Debug] Got material system factory at %p\n", materialSystemFactory);
+
+        // Try different material system versions
+        const char* materialSystemVersions[] = {
+            "VMaterialSystem082",
+            "VMaterialSystem081",
+            "VMaterialSystem080"
+        };
+
+        void* materialSystemRaw = nullptr;
+        const char* successVersion = nullptr;
+
+        for (const char* version : materialSystemVersions) {
+            Msg("[Interface Debug] Trying material system version: %s\n", version);
+            materialSystemRaw = materialSystemFactory(version, nullptr);
+            if (materialSystemRaw) {
+                successVersion = version;
+                break;
+            }
+        }
+
+        if (!materialSystemRaw) {
+            Error("[Interface Debug] Failed to get material system interface with any version\n");
             return 0;
         }
 
-        // Initialize Remix
-        if (auto interf = remix::lib::loadRemixDllAndInitialize(L"d3d9.dll")) {
-            g_remix = new remix::Interface{ *interf };
-        }
-        else {
-            LUA->ThrowError("[RTX Remix Fixes 2] - remix::loadRemixDllAndInitialize() failed"); 
-        }
+        Msg("[Interface Debug] Successfully got material system with version: %s\n", successVersion);
 
-        g_remix->dxvk_RegisterD3D9Device(sourceDevice);
-
-        // Initialize RTX Light Manager
-        RTXLightManager::Instance().Initialize(g_remix);
-
-        // Configure RTX settings
-        if (g_remix) {
-            g_remix->SetConfigVariable("rtx.enableAdvancedMode", "1");
-            g_remix->SetConfigVariable("rtx.fallbackLightMode", "2");
-            Msg("[RTX Remix Fixes] RTX configuration set\n");
+        // Cast to IMaterialSystem
+        materials = static_cast<IMaterialSystem*>(materialSystemRaw);
+        if (!materials) {
+            Error("[Interface Debug] Failed to cast material system interface\n");
+            return 0;
         }
 
-        // Register Lua functions
-        LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB); 
-            LUA->PushCFunction(CreateRTXLight);
-            LUA->SetField(-2, "CreateRTXLight");
-            
-            LUA->PushCFunction(UpdateRTXLight);
-            LUA->SetField(-2, "UpdateRTXLight");
-            
-            LUA->PushCFunction(DestroyRTXLight);
-            LUA->SetField(-2, "DestroyRTXLight");
-            
-            LUA->PushCFunction(DrawRTXLights);
-            LUA->SetField(-2, "DrawRTXLights");
-        LUA->Pop();
+        Msg("[Interface Debug] Material system interface initialized at %p\n", materials);
 
-        return 0;
+        // Test material system functionality
+        IMaterial* testMaterial = materials->FindMaterial("debug/debugempty", TEXTURE_GROUP_OTHER);
+        if (!testMaterial) {
+            Error("[Interface Debug] Failed to find test material\n");
+            return 0;
+        }
+
+        Msg("[Interface Debug] Successfully tested material system functionality\n");
+
+        if (!MaterialConverter::VerifyMaterialSystem()) {
+            Error("[RTX Fixes] Material system verification failed\n");
+            return 0;
+        }
+
+        Msg("[Hook Debug] Starting material system hook setup...\n");
+        Msg("[Hook Debug] Material system interface: %p\n", materials);
+
+        try {
+            void** vtable = *reinterpret_cast<void***>(materials);
+            if (!vtable) {
+                Error("[Hook Debug] Failed to get vtable - null pointer\n");
+                return 0;
+            }
+            Msg("[Hook Debug] Found vtable at %p\n", vtable);
+
+            // Log vtable entries
+            for (int i = 80; i < 86; i++) {
+                Msg("[Hook Debug] vtable[%d] = %p\n", i, vtable[i]);
+            }
+
+            void* findMaterialFunc = vtable[83];
+            if (!findMaterialFunc) {
+                Error("[Hook Debug] FindMaterial function pointer is null\n");
+                return 0;
+            }
+            Msg("[Hook Debug] Found FindMaterial at %p\n", findMaterialFunc);
+
+            static Detouring::Hook findMaterialHook;
+            Detouring::Hook::Target target(findMaterialFunc);
+
+            Msg("[Hook Debug] Creating detour...\n");
+            if (!findMaterialHook.Create(target, MaterialSystem_FindMaterial_detour)) {
+                Error("[Hook Debug] Failed to create hook\n");
+                return 0;
+            }
+            
+            g_original_FindMaterial = findMaterialHook.GetTrampoline<FindMaterial_t>();
+            if (!g_original_FindMaterial) {
+                Error("[Hook Debug] Failed to get trampoline function\n");
+                return 0;
+            }
+
+            findMaterialHook.Enable();
+            Msg("[Hook Debug] Hook enabled successfully\n");
+
+            // Test the hook
+            IMaterial* testMat = materials->FindMaterial("debug/debugempty", TEXTURE_GROUP_OTHER, true);
+            if (!testMat) {
+                Error("[Hook Debug] Hook test failed - couldn't find test material\n");
+                return 0;
+            }
+            
+            Msg("[Hook Debug] Hook test successful\n");
+
+            if (!MaterialConverter::Instance().Initialize()) {
+                Error("[Hook Debug] Failed to initialize material converter\n");
+                return 0;
+            }
+
+            Msg("[RTX Fixes] Module initialization completed successfully\n");
+            return 1;  // Return 1 for success
+        }
+        catch (const std::exception& e) {
+            Error("[Hook Debug] Exception during hook setup: %s\n", e.what());
+            return 0;
+        }
+        catch (...) {
+            Error("[Hook Debug] Unknown exception during hook setup\n");
+            return 0;
+        }
     }
     catch (...) {
         Error("[RTX] Exception in module initialization\n");
@@ -241,14 +326,7 @@ GMOD_MODULE_CLOSE() {
         Msg("[RTX] Shutting down module...\n");
 
                 // Shutdown shader protection
-        ShaderAPIHooks::Instance().Shutdown();
-        
-        RTXLightManager::Instance().Shutdown();
-
-        if (g_remix) {
-            delete g_remix;
-            g_remix = nullptr;
-        }
+        //ShaderAPIHooks::Instance().Shutdown();
 
         Msg("[RTX] Module shutdown complete\n");
         return 0;
