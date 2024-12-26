@@ -9,7 +9,7 @@
 #include <d3d9.h>
 #include "rtx_lights/rtx_light_manager.h"
 #include "mesh_system/mesh_system_init.h"
-
+#include "mesh_system/mesh_system_lua.h"
 
 #ifdef GMOD_MAIN
 extern IMaterialSystem* materials = NULL;
@@ -181,9 +181,13 @@ void* FindD3D9Device() {
 }
 
 GMOD_MODULE_OPEN() { 
+
+    // mesh system
     if (!MeshSystem::Initialize(LUA)) {
         return 1;
     }
+    // Initialize mesh Lua bindings
+    MeshSystemLua::Initialize(LUA);
 
     try {
         Msg("[RTX Remix Fixes 2] - Module loaded!\n"); 

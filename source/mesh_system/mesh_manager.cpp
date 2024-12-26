@@ -4,6 +4,15 @@
 #include "bsp_reader.h"
 #include "tier0/dbg.h"
 #include <algorithm>
+#include "materialsystem/ishaderapi.h"
+#include "debugoverlay.h"
+#include "cdll_int.h"
+#include "icliententitylist.h"
+#include "utils/shader_types.h"
+
+#define SHADER_BLEND_SRC_ALPHA 4
+#define SHADER_BLEND_ONE_MINUS_SRC_ALPHA 5
+#define MAX_LIGHTMAPS 4
 
 // External engine interfaces
 extern IMaterialSystem* g_materials;
@@ -18,10 +27,10 @@ MeshManager& MeshManager::Instance() {
 
 MeshManager::MeshManager() 
     : m_bspReader(nullptr) {
-    // Create ConVars
-    cvar->RegisterConVar("rtx_force_render", "1", FCVAR_CLIENTDLL, "Forces custom mesh rendering of map");
-    cvar->RegisterConVar("rtx_force_render_debug", "0", FCVAR_CLIENTDLL, "Shows debug info for mesh rendering");
-    cvar->RegisterConVar("rtx_chunk_size", "512", FCVAR_CLIENTDLL, "Size of chunks for mesh combining");
+    // Replace RegisterConVar with CreateConVar
+    ConVar* rtx_force_render = new ConVar("rtx_force_render", "1", FCVAR_CLIENTDLL, "Forces custom mesh rendering of map");
+    ConVar* rtx_force_render_debug = new ConVar("rtx_force_render_debug", "0", FCVAR_CLIENTDLL, "Shows debug info for mesh rendering");
+    ConVar* rtx_chunk_size = new ConVar("rtx_chunk_size", "512", FCVAR_CLIENTDLL, "Size of chunks for mesh combining");
 }
 
 MeshManager::~MeshManager() {
@@ -118,13 +127,13 @@ void MeshManager::RebuildMeshes() {
 }
 
 void MeshManager::ProcessMapGeometry() {
-    if (!m_bspReader || !engine) {
+    if (!m_bspReader || !g_engine) {
         Warning("[Mesh System] Missing required interfaces for mesh processing\n");
         return;
     }
 
     // Get world model
-    model_t* worldModel = modelinfo->GetModel(0); // 0 is always world model
+    model_t* worldModel = g_modelinfo->GetModel(0); // 0 is always world model
     if (!worldModel) {
         Warning("[Mesh System] Failed to get world model\n");
         return;
@@ -265,6 +274,23 @@ void MeshManager::ProcessMapGeometry() {
         m_opaqueChunks.size(), m_translucentChunks.size());
 }
 
+bool MeshManager::UpdateCameraPosition() {
+    if (!g_engine || !g_entitylist) return false;
+
+    Vector cameraPos;
+    QAngle viewAngles;
+    if (g_engine->GetViewAngles(viewAngles)) {
+        if (IClientEntity* localPlayer = g_entitylist->GetClientEntity(g_engine->GetLocalPlayer())) {
+            Vector viewOffset;
+            if (localPlayer->GetAbsOrigin(&cameraPos) && localPlayer->GetViewOffset(&viewOffset)) {
+                cameraPos += viewOffset;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool MeshManager::IsSkyboxMaterial(IMaterial* material) {
     if (!material) return false;
     
@@ -360,10 +386,38 @@ void MeshManager::RenderTranslucentChunks() {
     pRenderContext->SetAmbientLight(1.0f, 1.0f, 1.0f);
     pRenderContext->FogMode(MATERIAL_FOG_LINEAR);
     
-    // Translucent-specific states
-    pRenderContext->EnableBlending(true);
-    pRenderContext->BlendFunc(SHADER_BLEND_SRC_ALPHA, SHADER_BLEND_ONE_MINUS_SRC_ALPHA);
-    pRenderContext->DepthMask(false); // Don't write to depth for translucent geometry
+    // Set up translucent rendering state
+    ShaderStencilState_t stencilState;
+    stencilState.m_bEnable = false;
+    stencilState.m_nReferenceValue = 0;
+    stencilState.m_nTestMask = 0xFF;
+    stencilState.m_nWriteMask = 0;
+    stencilState.m_CompareFunc = SHADER_STENCILFUNC_ALWAYS;
+    stencilState.m_PassOp = SHADER_STENCILOP_KEEP;
+    stencilState.m_FailOp = SHADER_STENCILOP_KEEP;
+    stencilState.m_ZFailOp = SHADER_STENCILOP_KEEP;
+
+    pRenderContext->SetStencilState(stencilState);
+    pRenderContext->OverrideDepthEnable(true, false);  // Enable depth test but disable writes
+    
+    // For each material, set up proper blend state
+    if (material && material->IsTranslucent()) {
+        pRenderContext->OverrideBlend(true, 
+            SHADER_BLEND_SRC_ALPHA, 
+            SHADER_BLEND_ONE_MINUS_SRC_ALPHA);
+    }
+    
+    // Setup stencil state to prevent z-write
+    ShaderStencilState_t stencilState;
+    stencilState.m_bEnable = false;
+    stencilState.m_nWriteMask = 0xFF;
+    stencilState.m_nTestMask = 0xFF;
+    stencilState.m_nReferenceValue = 0;
+    stencilState.m_CompareFunc = SHADER_STENCILFUNC_ALWAYS;
+    stencilState.m_PassOp = SHADER_STENCILOP_KEEP;
+    stencilState.m_FailOp = SHADER_STENCILOP_KEEP;
+    stencilState.m_ZFailOp = SHADER_STENCILOP_KEEP;
+    pRenderContext->SetStencilState(stencilState);
 
     // Sort chunks by distance from camera for proper transparency
     struct SortedChunk {
@@ -375,9 +429,8 @@ void MeshManager::RenderTranslucentChunks() {
     // Get camera position for sorting
     Vector cameraPos;
     QAngle viewAngles;
-    if (engine->GetViewAngles(viewAngles)) {
-        // Get local player position and view offset
-        if (IClientEntity* localPlayer = entitylist->GetClientEntity(engine->GetLocalPlayer())) {
+    if (g_engine->GetViewAngles(viewAngles)) {
+        if (IClientEntity* localPlayer = g_entitylist->GetClientEntity(g_engine->GetLocalPlayer())) {
             Vector viewOffset;
             if (localPlayer->GetAbsOrigin(&cameraPos) && localPlayer->GetViewOffset(&viewOffset)) {
                 cameraPos += viewOffset;
@@ -408,6 +461,13 @@ void MeshManager::RenderTranslucentChunks() {
     // Current material tracking
     IMaterial* currentMaterial = nullptr;
 
+    // Setup material override state
+    MaterialOverrideState_t overrideState;
+    overrideState.m_bOverrideDepthWrite = true;
+    overrideState.m_bOverrideAlphaWrite = true;
+    overrideState.m_bEnableDepthWrite = false;
+    overrideState.m_bEnableAlphaWrite = true;
+
     // Render sorted translucent chunks
     for (const auto& sorted : sortedChunks) {
         const MeshChunk* chunk = sorted.chunk;
@@ -416,6 +476,7 @@ void MeshManager::RenderTranslucentChunks() {
         // Material state change if needed
         if (material != currentMaterial) {
             pRenderContext->Bind(material);
+            pRenderContext->SetMaterialOverrideState(overrideState);
             currentMaterial = material;
             translucentMaterialChanges++;
         }
@@ -426,8 +487,15 @@ void MeshManager::RenderTranslucentChunks() {
     }
 
     // Restore render states
-    pRenderContext->DepthMask(true);
-    pRenderContext->EnableBlending(false);
+    pRenderContext->EnableAlpha(false);
+    pRenderContext->SetStencilState(ShaderStencilState_t());  // Reset to default
+    pRenderContext->OverrideDepthEnable(false, false);
+    pRenderContext->OverrideBlend(false);
+    
+    // Clear material override
+    MaterialOverrideState_t defaultOverride;
+    pRenderContext->SetMaterialOverrideState(defaultOverride);
+    
     pRenderContext->PopRenderTargetAndViewport();
 
     // Update overall stats

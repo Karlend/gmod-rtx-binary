@@ -1,3 +1,4 @@
+#include "GarrysMod/Lua/Interface.h"
 #pragma once
 
 namespace MeshSystem {

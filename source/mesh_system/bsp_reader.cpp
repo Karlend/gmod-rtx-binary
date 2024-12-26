@@ -3,6 +3,9 @@
 #include "materialsystem/imaterialsystem.h"
 #include "bspflags.h"  // Add this for SURF_ flags
 #include <tier0/dbg.h>
+#include <algorithm>
+#include "mathlib/mathlib.h"
+#include "icliententity.h"
 
 extern IMaterialSystem* g_materials;
 

@@ -3,6 +3,23 @@
 #include "mathlib/vector.h"
 #include "materialsystem/imaterial.h"
 #include <vector>
+#include "materialsystem/ishaderapi.h"
+
+#define SHADER_BLEND_SRC_ALPHA 4
+#define SHADER_BLEND_ONE_MINUS_SRC_ALPHA 5
+#define VERTEX_POSITION         0x0001
+#define VERTEX_NORMAL          0x0002
+#define VERTEX_COLOR           0x0004
+#define VERTEX_TEXCOORD_SIZE(n,size)  (((size) & 0xFF) << (((n) & 0x3) * 8 + 8))
+
+struct VertexDesc_t {
+    int m_VertexSize_Position;
+    int m_VertexSize_Normal;
+    int m_VertexSize_Color;
+    int m_VertexSize_TexCoord[8];
+};
+
+#define MATERIAL_TRIANGLES     2
 
 struct Vertex {
     Vector pos;
@@ -35,11 +52,12 @@ public:
     MeshChunk& operator=(const MeshChunk&) = delete;
 
     bool AddFace(const std::vector<Vertex>& vertices, const std::vector<unsigned short>& indices);
-    void Draw();
+    void Draw() const;
     bool IsValid() const;
     
     IMaterial* GetMaterial() const { return m_material; }
     size_t GetVertexCount() const { return m_vertices.size(); }
+    
 
 private:
     IMaterial* m_material;

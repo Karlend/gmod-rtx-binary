@@ -5,6 +5,13 @@
 #include "cmodel.h"
 #include "materialsystem/imaterial.h"
 #include "utlvector.h"
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include "mesh_chunk.h"
+#include "dispcoll.h" // For CDispInfo
+#include "studio.h" // Contains surface definitions
+#include "bsp_structs.h"
 
 // Forward declarations for Source Engine types we need
 struct model_t;
@@ -18,17 +25,20 @@ class BSPFace {
 public:
     BSPFace(msurface_t* surface, byte* modelBasis);
     
+    // Public interface
     bool ShouldRender() const;
     bool IsSky() const;
     IMaterial* GetMaterial() const;
-    
-    bool GetVertexData(std::vector<Vector>& vertices, 
-                      std::vector<Vector>& normals,
-                      std::vector<Vector2D>& texcoords);
-    
+    bool GetVertexData(std::vector<Vertex>& vertices, std::vector<unsigned short>& indices);
     int NumIndices() const;
     unsigned short GetIndex(int index) const;
+
+    // Make these public as they're used by other classes
+    bool GetCenter(Vector& center) const;
+    bool IsTranslucent() const;
+    bool IsDisplacement() const;
     Vector GetLightmapColor(int vertex) const;
+    Vector GetDisplacementLightmapColor(int index) const;
 
 private:
     msurface_t* m_surface;
@@ -37,14 +47,14 @@ private:
 
 class BSPLeaf {
 public:
-    BSPLeaf(void* leaf, byte* modelBasis);  // Changed from dleaf_t* to void*
+    BSPLeaf(void* leaf, byte* modelBasis);
     
     bool IsOutsideMap() const;
     int NumFaces() const;
     BSPFace* GetFace(int index);
 
 private:
-    void* m_leaf;  // Changed from dleaf_t*
+    void* m_leaf;
     byte* m_modelBasis;
     std::vector<BSPFace> m_faces;
 };
@@ -63,21 +73,23 @@ public:
     // Helper functions
     const char* GetTextureName(int index) const;
     IMaterial* GetTextureMaterial(int index) const;
+    IMaterial* GetCachedMaterial(const char* textureName) const;  // Moved from BSPFace
     
 private:
     bool LoadLeafs();
     bool LoadTextures();
     bool ValidateHeader() const;
+    void LogDebug(const char* format, ...) const;
 
-    std::unordered_map<std::string, IMaterial*> m_materialCache;
     model_t* m_worldModel;
     dheader_t* m_header;
     byte* m_base;
 
     struct Config {
-    bool debugMode = false;
+        bool debugMode = false;
     } m_config;
     
-    std::vector<BSPLeaf> m_leafs;
+    std::unordered_map<std::string, IMaterial*> m_materialCache;
     std::vector<IMaterial*> m_materials;
+    std::vector<BSPLeaf> m_leafs;
 };

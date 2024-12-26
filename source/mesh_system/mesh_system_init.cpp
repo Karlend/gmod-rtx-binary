@@ -1,12 +1,16 @@
 #include "mesh_system_init.h"
 #include "mesh_manager.h"
 #include <tier0/dbg.h>
+#include <algorithm>
 
 // Global interfaces used by mesh system
 IMaterialSystem* g_materials = nullptr;
 IVEngineClient* g_engine = nullptr;
 IVModelInfo* g_modelinfo = nullptr;
 IClientEntityList* g_entitylist = nullptr;
+
+extern IVDebugOverlay* debugoverlay;
+extern ICvar* cvar;
 
 namespace MeshSystem {
 
