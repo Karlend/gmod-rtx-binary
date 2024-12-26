@@ -1,9 +1,11 @@
 #include "shader_hooks.h"
 #include <algorithm>
 #include <psapi.h>
+#include <vector>
+#include <cctype>
 #pragma comment(lib, "psapi.lib")
 
-// Define the global variables here
+// Global variables here
 IShaderAPI* g_pShaderAPI = nullptr;
 IDirect3DDevice9* g_pD3DDevice = nullptr;
 
@@ -21,6 +23,18 @@ ShaderAPIHooks::DivisionFunction_t ShaderAPIHooks::g_original_DivisionFunction =
 ShaderAPIHooks::VertexBufferLock_t ShaderAPIHooks::g_original_VertexBufferLock = nullptr;
 std::unordered_set<uintptr_t> ShaderAPIHooks::s_problematicAddresses;
 ShaderAPIHooks::ParticleRender_t ShaderAPIHooks::g_original_ParticleRender = nullptr;
+std::map<uint64_t, uint32_t> ShaderAPIHooks::s_sequenceStarts;
+ShaderAPIHooks::LoadMaterial_t ShaderAPIHooks::g_original_LoadMaterial = nullptr;
+bool ShaderAPIHooks::s_inOcclusionProxy = false;
+
+// Initialize function pointers
+ShaderAPIHooks::FindMaterial_t ShaderAPIHooks::g_original_FindMaterial = nullptr;
+ShaderAPIHooks::BeginRenderPass_t ShaderAPIHooks::g_original_BeginRenderPass = nullptr;
+
+ShaderAPIHooks::CreateMaterial_t ShaderAPIHooks::g_original_CreateMaterial = nullptr;
+ShaderAPIHooks::GetHardwareConfig_t ShaderAPIHooks::g_original_GetHardwareConfig = nullptr;
+ShaderAPIHooks::InitMaterialSystem_t ShaderAPIHooks::g_original_InitMaterialSystem = nullptr;
+ShaderAPIHooks::InitProxyMaterial_t ShaderAPIHooks::g_original_InitProxyMaterial = nullptr;
 
 namespace {
     bool IsValidPointer(const void* ptr, size_t size) {
@@ -33,8 +47,24 @@ namespace {
     }
 }
 
+LONG WINAPI GlobalExceptionHandler(EXCEPTION_POINTERS* ExceptionInfo) {
+    if (ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_INT_DIVIDE_BY_ZERO) {
+        Warning("[Shader Fixes] Global handler caught division by zero at %p\n",
+            ExceptionInfo->ExceptionRecord->ExceptionAddress);
+
+        // Skip the faulting instruction
+        ExceptionInfo->ContextRecord->Rip += 2;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 void ShaderAPIHooks::Initialize() {
     try {
+        // Install global exception handler first
+        SetUnhandledExceptionFilter(GlobalExceptionHandler);
+
+        
         HMODULE shaderapidx9 = GetModuleHandle("shaderapidx9.dll");
         if (!shaderapidx9) {
             Error("[Shader Fixes] Failed to get shaderapidx9.dll module\n");
@@ -43,7 +73,6 @@ void ShaderAPIHooks::Initialize() {
 
         // Add more specific patterns from the crash
         static const std::pair<const char*, const char*> signatures[] = {
-            // Pattern leading to the idiv instruction from your crash dump
             {"48 63 C8 99 F7 F9", "Division instruction"},
             {"89 51 34 89 38 48 89 D9", "Function entry"},
             {"8B F2 44 0F B6 C0", "Parameter setup"},
@@ -98,15 +127,18 @@ void ShaderAPIHooks::Initialize() {
             return EXCEPTION_CONTINUE_SEARCH;
         });
 
-        // Hook material system for particle detection
+        // Add material system hooks
         if (materials) {
             void** vtable = *reinterpret_cast<void***>(materials);
             if (vtable) {
-                // Hook GetRenderContext (typically index 114)
-                void* renderContextFunc = vtable[114];
-                if (renderContextFunc) {
-                    Msg("[Shader Fixes] Found GetRenderContext at %p\n", renderContextFunc);
-                    // Add hook here if needed
+                // Hook LoadMaterial (typically index 71)
+                void* loadMaterialFunc = vtable[71];
+                if (loadMaterialFunc) {
+                    Detouring::Hook::Target target(loadMaterialFunc);
+                    m_LoadMaterial_hook.Create(target, LoadMaterial_detour);
+                    g_original_LoadMaterial = m_LoadMaterial_hook.GetTrampoline<LoadMaterial_t>();
+                    m_LoadMaterial_hook.Enable();
+                    Msg("[Shader Fixes] Hooked LoadMaterial at %p\n", loadMaterialFunc);
                 }
             }
         }
@@ -140,6 +172,89 @@ void ShaderAPIHooks::Initialize() {
         if (handler) {
             Msg("[Shader Fixes] Installed vectored exception handler at %p\n", handler);
         }
+
+        // Add material system hooks
+        if (materials) {
+            void** vtable = *reinterpret_cast<void***>(materials);
+            if (vtable) {
+                // Hook FindMaterial (typically index 83)
+                void* findMaterialFunc = vtable[83];
+                if (findMaterialFunc) {
+                    Detouring::Hook::Target target(findMaterialFunc);
+                    m_FindMaterial_hook.Create(target, FindMaterial_detour);
+                    g_original_FindMaterial = m_FindMaterial_hook.GetTrampoline<FindMaterial_t>();
+                    m_FindMaterial_hook.Enable();
+                    Msg("[Shader Fixes] Hooked FindMaterial at %p\n", findMaterialFunc);
+                }
+
+                // Get render context to hook BeginRenderPass
+                IMatRenderContext* renderContext = materials->GetRenderContext();
+                if (renderContext) {
+                    void** renderVtable = *reinterpret_cast<void***>(renderContext);
+                    if (renderVtable) {
+                        // BeginRenderPass is typically index 105
+                        void* beginRenderPassFunc = renderVtable[105];
+                        if (beginRenderPassFunc) {
+                            Detouring::Hook::Target target(beginRenderPassFunc);
+                            m_BeginRenderPass_hook.Create(target, BeginRenderPass_detour);
+                            g_original_BeginRenderPass = m_BeginRenderPass_hook.GetTrampoline<BeginRenderPass_t>();
+                            m_BeginRenderPass_hook.Enable();
+                            Msg("[Shader Fixes] Hooked BeginRenderPass at %p\n", beginRenderPassFunc);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Find the material system initialization function
+        void* matSysInit = FindPattern("materialsystem.dll", "55 8B EC 83 E4 F8 83 EC 18 56 57");
+        if (matSysInit) {
+            Detouring::Hook::Target target(matSysInit);
+            m_InitMaterialSystem_hook.Create(target, InitMaterialSystem_detour);
+            g_original_InitMaterialSystem = m_InitMaterialSystem_hook.GetTrampoline<InitMaterialSystem_t>();
+            m_InitMaterialSystem_hook.Enable();
+        }
+
+        // Find the proxy material initialization function
+        void* proxyInit = FindPattern("materialsystem.dll", "55 8B EC 56 8B 75 08 57 8B F9 56 8B 07");
+        if (proxyInit) {
+            Detouring::Hook::Target target(proxyInit);
+            m_InitProxyMaterial_hook.Create(target, InitProxyMaterial_detour);
+            g_original_InitProxyMaterial = m_InitProxyMaterial_hook.GetTrampoline<InitProxyMaterial_t>();
+            m_InitProxyMaterial_hook.Enable();
+        }
+        
+        // Add hooks for material factory functions
+        if (materials) {
+            void** vtable = *reinterpret_cast<void***>(materials);
+            if (vtable) {
+                // Hook CreateMaterial (typically index 72)
+                void* createMaterialFunc = vtable[72];
+                if (createMaterialFunc) {
+                    Detouring::Hook::Target target(createMaterialFunc);
+                    m_CreateMaterial_hook.Create(target, CreateMaterial_detour);
+                    g_original_CreateMaterial = m_CreateMaterial_hook.GetTrampoline<CreateMaterial_t>();
+                    m_CreateMaterial_hook.Enable();
+                }
+                
+                // Hook GetMaterialSystemHardwareConfig (typically index 13)
+                void* getHardwareConfigFunc = vtable[13];
+                if (getHardwareConfigFunc) {
+                    Detouring::Hook::Target target(getHardwareConfigFunc);
+                    m_GetHardwareConfig_hook.Create(target, GetHardwareConfig_detour);
+                    g_original_GetHardwareConfig = m_GetHardwareConfig_hook.GetTrampoline<GetHardwareConfig_t>();
+                    m_GetHardwareConfig_hook.Enable();
+                }
+            }
+        }
+
+        if (InitializeLogging()) {
+            LogToFile("Shader protection initialized - hooks installed:\n");
+            LogToFile("  DrawIndexedPrimitive: %s\n", m_DrawIndexedPrimitive_hook.IsEnabled() ? "Enabled" : "Disabled");
+            LogToFile("  SetVertexShader: %s\n", m_SetVertexShader_hook.IsEnabled() ? "Enabled" : "Disabled");
+            LogToFile("  SetStreamSource: %s\n", m_SetStreamSource_hook.IsEnabled() ? "Enabled" : "Disabled");
+            LogToFile("  ConMsg: %s\n", s_ConMsg_hook.IsEnabled() ? "Enabled" : "Disabled");
+        }        
 
         // Find D3D9 device
         static const char device_sig[] = "BA E1 0D 74 5E 48 89 1D ?? ?? ?? ??";
@@ -204,6 +319,106 @@ void ShaderAPIHooks::Initialize() {
     }
 }
 
+void* ShaderAPIHooks::FindPattern(const char* module, const char* pattern) {
+    HMODULE moduleHandle = GetModuleHandleA(module);
+    if (!moduleHandle) {
+        Warning("[Shader Fixes] Failed to get module handle for %s\n", module);
+        return nullptr;
+    }
+
+    MODULEINFO moduleInfo;
+    if (!GetModuleInformation(GetCurrentProcess(), moduleHandle, &moduleInfo, sizeof(moduleInfo))) {
+        Warning("[Shader Fixes] Failed to get module information for %s\n", module);
+        return nullptr;
+    }
+
+    // Convert pattern to bytes
+    std::vector<int> bytes;
+    const char* start = pattern;
+    const char* end = pattern + strlen(pattern);
+    
+    for (const char* current = start; current < end; ) {
+        // Skip whitespace
+        while (current < end && isspace(*current)) current++;
+        if (current >= end) break;
+
+        // Handle wildcard
+        if (*current == '?') {
+            bytes.push_back(-1);
+            current++;
+            continue;
+        }
+
+        // Convert hex string to byte
+        if (current + 1 < end && isxdigit(*current) && isxdigit(*(current + 1))) {
+            char hex[3] = { current[0], current[1], 0 };
+            bytes.push_back(strtol(hex, nullptr, 16));
+            current += 2;
+        }
+        else {
+            current++;
+        }
+    }
+
+    if (bytes.empty()) {
+        Warning("[Shader Fixes] Invalid pattern: %s\n", pattern);
+        return nullptr;
+    }
+
+    // Search for pattern
+    uint8_t* scanStart = reinterpret_cast<uint8_t*>(moduleHandle);
+    uint8_t* scanEnd = scanStart + moduleInfo.SizeOfImage - bytes.size();
+
+    for (uint8_t* current = scanStart; current < scanEnd; current++) {
+        bool found = true;
+        for (size_t i = 0; i < bytes.size(); i++) {
+            if (bytes[i] == -1) continue; // Skip wildcards
+            if (current[i] != bytes[i]) {
+                found = false;
+                break;
+            }
+        }
+        if (found) {
+            return current;
+        }
+    }
+
+    Warning("[Shader Fixes] Pattern not found in module %s: %s\n", module, pattern);
+    return nullptr;
+}
+
+IMaterial* __fastcall ShaderAPIHooks::CreateMaterial_detour(void* thisptr, void* edx, 
+    const char* pMaterialName, KeyValues* pVMTKeyValues) {
+    
+    if (pMaterialName && strstr(pMaterialName, "occlusion") != nullptr) {
+        LogToFile("\n=== Occlusion Proxy Creation Attempt ===\n");
+        LogToFile("CreateMaterial called for: %s\n", pMaterialName);
+        LogToFile("Return Address: %p\n", _ReturnAddress());
+        
+        // Log KeyValues if available
+        if (pVMTKeyValues) {
+            LogToFile("KeyValues contents:\n");
+            for (KeyValues* kv = pVMTKeyValues->GetFirstSubKey(); kv; kv = kv->GetNextKey()) {
+                LogToFile("  %s = %s\n", kv->GetName(), kv->GetString());
+            }
+        }
+        
+        void* callStack[32];
+        DWORD framesWritten = CaptureStackBackTrace(0, 32, callStack, nullptr);
+        LogToFile("Call Stack:\n");
+        LogStackTrace(callStack, framesWritten);
+        
+        LogToFile("=== End Creation Attempt ===\n\n");
+        return g_original_CreateMaterial(thisptr, "debug/debugempty", nullptr);
+    }
+    
+    return g_original_CreateMaterial(thisptr, pMaterialName, pVMTKeyValues);
+}
+
+void* __fastcall ShaderAPIHooks::GetHardwareConfig_detour(void* thisptr, void* edx) {
+    return g_original_GetHardwareConfig(thisptr);
+}
+
 void __fastcall ShaderAPIHooks::ParticleRender_detour(void* thisptr) {
     static float s_lastLogTime = 0.0f;
     float currentTime = GetTickCount64() / 1000.0f;
@@ -259,69 +474,214 @@ void __fastcall ShaderAPIHooks::ParticleRender_detour(void* thisptr) {
     s_state.isProcessingParticle = false;
 }
 
-int __fastcall ShaderAPIHooks::DivisionFunction_detour(int a1, int a2, int dividend, int divisor) {
-    void* returnAddress = _ReturnAddress();
+void ShaderAPIHooks::LogMessage(const char* format, ...) {
+    char buffer[1024];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    Msg("[Shader Fixes] %s", buffer);
+}
+
+bool ShaderAPIHooks::InitializeLogging() {
+    std::lock_guard<std::mutex> lock(s_logMutex);
     
-    // Get stack pointer using intrinsic
-    void* stackPointer = _AddressOfReturnAddress();
+    try {
+        if (s_loggingInitialized) return true;
 
-    // Log before attempting division
-    Msg("[Shader Fixes] Division operation:\n"
-        "  Return Address: %p\n"
-        "  Stack Pointer: %p\n"
-        "  Parameters: a1=%d, a2=%d, dividend=%d, divisor=%d\n",
-        returnAddress, stackPointer, a1, a2, dividend, divisor);
+        // Get the Garry's Mod directory
+        char gmodPath[MAX_PATH];
+        if (GetModuleFileName(nullptr, gmodPath, MAX_PATH) == 0) {
+            Warning("[RTX Fixes] Failed to get module path: %lu\n", GetLastError());
+            return false;
+        }
 
-    // Capture stack trace
-    void* stackTrace[10] = {};
-    USHORT frames = CaptureStackBackTrace(0, 10, stackTrace, nullptr);
-    Msg("[Shader Fixes] Stack trace:\n");
-    for (USHORT i = 0; i < frames; i++) {
-        Msg("  %d: %p\n", i, stackTrace[i]);
+        std::string path = gmodPath;
+        path = path.substr(0, path.find_last_of("\\/"));
+        
+        // Create directory paths
+        std::string garrysmodPath = path + "\\garrysmod";
+        std::string logsPath = garrysmodPath + "\\logs";
+        std::string rtxLogsPath = logsPath + "\\rtx_fixes";
+
+        // Create directories
+        if (!CreateDirectory(garrysmodPath.c_str(), nullptr) && 
+            GetLastError() != ERROR_ALREADY_EXISTS) {
+            Warning("[RTX Fixes] Failed to create garrysmod directory\n");
+            return false;
+        }
+
+        if (!CreateDirectory(logsPath.c_str(), nullptr) && 
+            GetLastError() != ERROR_ALREADY_EXISTS) {
+            Warning("[RTX Fixes] Failed to create logs directory\n");
+            return false;
+        }
+
+        if (!CreateDirectory(rtxLogsPath.c_str(), nullptr) && 
+            GetLastError() != ERROR_ALREADY_EXISTS) {
+            Warning("[RTX Fixes] Failed to create rtx_fixes directory\n");
+            return false;
+        }
+
+        // Create timestamp for filename
+        time_t now = time(nullptr);
+        struct tm timeinfo;
+        localtime_s(&timeinfo, &now);
+        char timestamp[32];
+        strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &timeinfo);
+        
+        // Open log file
+        s_logPath = rtxLogsPath + "\\shader_fixes_" + timestamp + ".log";
+        s_logFile.open(s_logPath, std::ios::out | std::ios::app);
+        
+        if (!s_logFile.is_open()) {
+            Warning("[RTX Fixes] Failed to open log file: %s\n", s_logPath.c_str());
+            return false;
+        }
+
+        // Write initial log entry
+        s_logFile << "=== RTX Shader Fixes Log Started at " << timestamp << " ===" << std::endl;
+        s_logFile << "Path: " << s_logPath << std::endl;
+        s_logFile << "Process ID: " << GetCurrentProcessId() << std::endl;
+        s_logFile << "=================================================" << std::endl;
+        
+        s_loggingInitialized = true;
+        Warning("[RTX Fixes] Log file initialized at: %s\n", s_logPath.c_str());
+        return true;
+    }
+    catch (const std::exception& e) {
+        Warning("[RTX Fixes] Exception in InitializeLogging: %s\n", e.what());
+        return false;
+    }
+    catch (...) {
+        Warning("[RTX Fixes] Unknown exception in InitializeLogging\n");
+        return false;
+    }
+}
+
+void ShaderAPIHooks::LogToFile(const char* format, ...) {
+    std::lock_guard<std::mutex> lock(s_logMutex);
+    
+    if (!s_loggingInitialized || !s_logFile.is_open()) {
+        return;
+    }
+    
+    try {
+        // Get timestamp for log entry
+        time_t now = time(nullptr);
+        struct tm timeinfo;
+        localtime_s(&timeinfo, &now);
+        char timestamp[32];
+        strftime(timestamp, sizeof(timestamp), "%H:%M:%S", &timeinfo);
+        
+        // Format the message
+        char buffer[4096];
+        va_list args;
+        va_start(args, format);
+        vsnprintf(buffer, sizeof(buffer), format, args);
+        va_end(args);
+        
+        // Write to file with timestamp
+        s_logFile << "[" << timestamp << "] " << buffer;
+        s_logFile.flush();
+    }
+    catch (...) {
+        Warning("[RTX Fixes] Exception in LogToFile\n");
+    }
+}
+
+int __fastcall ShaderAPIHooks::DivisionFunction_detour(int a1, int a2, int dividend, int divisor) {
+    void* const returnAddr = _ReturnAddress();
+    const uint64_t currentAddr = reinterpret_cast<uint64_t>(returnAddr);
+    const uint64_t lastThreeBytes = currentAddr & 0xFFF;
+
+    // Known crash addresses (last 3 bytes)
+    static const uint16_t KNOWN_OFFSETS[] = {
+        0x449, // First crash point
+        0x4AC, // Second crash point
+        0x534, // Third crash point
+        0xF3C  // Fourth crash point
+    };
+
+    // Check if we're at a known problematic address
+    bool isKnownAddress = false;
+    for (const auto offset : KNOWN_OFFSETS) {
+        if ((lastThreeBytes & 0xFFF) == offset) {
+            isKnownAddress = true;
+            break;
+        }
     }
 
-    // Add module information
-    HMODULE modules[10] = {};
-    DWORD needed = 0;
-    if (EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &needed)) {
-        for (DWORD i = 0; i < (needed / sizeof(HMODULE)); i++) {
-            char modName[MAX_PATH];
-            if (GetModuleFileNameA(modules[i], modName, sizeof(modName))) {
-                MODULEINFO modInfo;
-                if (GetModuleInformation(GetCurrentProcess(), modules[i], &modInfo, sizeof(modInfo))) {
-                    if (returnAddress >= modInfo.lpBaseOfDll && 
-                        returnAddress < (void*)((char*)modInfo.lpBaseOfDll + modInfo.SizeOfImage)) {
-                        Msg("  Module: %s Base: %p Size: %u\n", 
-                            modName, modInfo.lpBaseOfDll, modInfo.SizeOfImage);
-                    }
-                }
+    // Check if this is part of the occlusion proxy pattern
+    bool isOcclusionValue = (
+        (dividend >= 0x2FC && dividend <= 0x2FF) ||  // Old range
+        (dividend >= 0x47C && dividend <= 0x47F)     // New range
+    );
+
+    if (isKnownAddress || isOcclusionValue) {
+        if (divisor == 0) {
+            // Store the start of each sequence we see
+            if ((dividend & 0x3) == 0x3) { // If it's the highest value in the sequence
+                s_sequenceStarts[currentAddr] = dividend & ~0x3;
+            }
+
+            // Get the base value for this sequence
+            uint32_t sequenceBase = s_sequenceStarts[currentAddr];
+            uint32_t valueInSequence = dividend & 0x3;
+
+            LogMessage("Handling occlusion sequence:\n"
+                      "  Address: %p (offset: %03X)\n"
+                      "  Dividend: 0x%X (sequence base: 0x%X, value: %d)\n"
+                      "  R8: 0x%X\n"
+                      "  R9: 0x%X\n",
+                      returnAddr,
+                      lastThreeBytes,
+                      dividend,
+                      sequenceBase,
+                      valueInSequence,
+                      a1,
+                      a2);
+
+            switch (lastThreeBytes & 0xFFF) {
+                case 0x449: // First point - maintain sequence
+                    return dividend;
+                case 0x4AC: // Second point - maintain sequence
+                    return dividend;
+                case 0x534: // Third point - visibility test
+                    return valueInSequence + 1; // Return position in sequence
+                case 0xF3C: // Fourth point - final calculation
+                    return valueInSequence + 1; // Return position in sequence
+                default:
+                    return 1;
             }
         }
     }
 
-    __try {
-        if (divisor == 0) {
-            Warning("[Shader Fixes] Prevented division by zero! Caller: %p\n", returnAddress);
-            return 1;
-        }
+    // For non-zero divisors, protect against very small values
+    if (abs(divisor) < 1) {
+        Warning("[Shader Fixes] Very small divisor detected: %d\n", divisor);
+        return dividend;
+    }
 
-        // Validate input ranges
-        if (abs(dividend) > 1000000 || abs(divisor) < 1) {
-            Warning("[Shader Fixes] Suspicious division values at %p\n", returnAddress);
+    // Normal division handling
+    try {
+        int result = dividend / divisor;
+        
+        // Check for unreasonable results
+        if (abs(result) > 10000) {
+            Warning("[Shader Fixes] Extremely large division result at %p: %d\n", 
+                returnAddr, result);
             return dividend < 0 ? -1 : 1;
         }
 
-        // Log the operation
-        int result = dividend / divisor;
-        Msg("[Shader Fixes] Division result: %d = %d / %d\n", result, dividend, divisor);
-        
         return result;
     }
-    __except(EXCEPTION_EXECUTE_HANDLER) {
-        Warning("[Shader Fixes] Exception in division at %p\n", returnAddress);
+    catch (...) {
+        Warning("[Shader Fixes] Exception in division handler at %p\n", returnAddr);
         return 1;
     }
 }
+
 
 HRESULT __stdcall ShaderAPIHooks::VertexBufferLock_detour(
     void* thisptr,
@@ -363,6 +723,14 @@ void ShaderAPIHooks::Shutdown() {
     m_SetStreamSource_hook.Disable();
     m_SetVertexShader_hook.Disable();
     s_ConMsg_hook.Disable();
+    m_FindMaterial_hook.Disable();
+    m_BeginRenderPass_hook.Disable();
+    m_LoadMaterial_hook.Disable();    
+    
+    if (s_logFile.is_open()) {
+        s_logFile << "\n=== RTX Shader Fixes Log Ended ===\n";
+        s_logFile.close();
+    }
 }
 
 void __cdecl ShaderAPIHooks::ConMsg_detour(const char* fmt, ...) {
@@ -408,6 +776,19 @@ HRESULT __stdcall ShaderAPIHooks::DrawIndexedPrimitive_detour(
     UINT PrimitiveCount) {
     
     __try {
+        // Skip occlusion proxy completely
+        if (materials && materials->GetRenderContext()) {
+            IMaterial* currentMaterial = materials->GetRenderContext()->GetCurrentMaterial();
+            if (currentMaterial && currentMaterial->GetName()) {
+                const char* matName = currentMaterial->GetName();
+                if (strcmp(matName, "engine/occlusionproxy") == 0 ||
+                    strstr(matName, "occlusionproxy") != nullptr) {
+                    LogMessage("Skipping occlusion proxy draw call\n");
+                    return D3D_OK;
+                }
+            }
+        }
+
         if (s_state.isProcessingParticle || IsParticleSystem()) {
             if (!ValidatePrimitiveParams(MinVertexIndex, NumVertices, PrimitiveCount)) {
                 Warning("[Shader Fixes] Blocked invalid draw call for %s\n", 
@@ -427,6 +808,165 @@ HRESULT __stdcall ShaderAPIHooks::DrawIndexedPrimitive_detour(
     }
 }
 
+bool __fastcall ShaderAPIHooks::InitMaterialSystem_detour(void* thisptr, void* edx, void* hardwareConfig, void* adapter, const char* materialBasedir) {
+    LogToFile("Material system initialization intercepted\n");
+    
+    // Log the call stack with module information
+    void* callStack[32];
+    DWORD framesWritten = CaptureStackBackTrace(0, 32, callStack, nullptr);
+    
+    LogToFile("Material system initialization call stack:\n");
+    LogStackTrace(callStack, framesWritten);
+    LogToFile("\n");
+    
+    // Fix: Add proper argument types and cast string to void*
+    return InitMaterialSystem_trampoline()(
+        thisptr,
+        edx,
+        hardwareConfig,
+        adapter,
+        materialBasedir
+    );
+}
+
+void ShaderAPIHooks::LogStackTrace(void* const* callStack, DWORD frameCount) {
+    HMODULE modules[1024];
+    DWORD cbNeeded;
+    
+    if (EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &cbNeeded)) {
+        DWORD numModules = cbNeeded / sizeof(HMODULE);
+        
+        for (DWORD i = 0; i < frameCount; i++) {
+            DWORD64 addr = (DWORD64)callStack[i];
+            bool foundModule = false;
+            
+            for (DWORD j = 0; j < numModules; j++) {
+                MODULEINFO modInfo;
+                if (GetModuleInformation(GetCurrentProcess(), modules[j], &modInfo, sizeof(modInfo))) {
+                    if (addr >= (DWORD64)modInfo.lpBaseOfDll && 
+                        addr < (DWORD64)modInfo.lpBaseOfDll + modInfo.SizeOfImage) {
+                        char modName[MAX_PATH];
+                        GetModuleFileNameEx(GetCurrentProcess(), modules[j], modName, MAX_PATH);
+                        
+                        std::string modulePath = modName;
+                        size_t pos = modulePath.find_last_of("\\/");
+                        std::string moduleBaseName = (pos == std::string::npos) ? 
+                            modulePath : modulePath.substr(pos + 1);
+                        
+                        LogToFile("  [%d] %p in %s (+0x%llX)\n", 
+                            i, 
+                            (void*)addr, 
+                            moduleBaseName.c_str(),
+                            addr - (DWORD64)modInfo.lpBaseOfDll);
+                        foundModule = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (!foundModule) {
+                LogToFile("  [%d] %p (unknown module)\n", i, (void*)addr);
+            }
+        }
+    }
+}
+
+void __fastcall ShaderAPIHooks::InitProxyMaterial_detour(void* proxyData) {
+    LogMessage("Proxy material initialization intercepted\n");
+    
+    // Log the call stack
+    void* callStack[32];
+    DWORD framesWritten = CaptureStackBackTrace(0, 32, callStack, nullptr);
+    
+    LogMessage("Proxy material initialization call stack:\n");
+    for (DWORD i = 0; i < framesWritten; i++) {
+        DWORD64 addr = (DWORD64)callStack[i];
+        LogMessage("  [%d] %p\n", i, (void*)addr);
+    }
+    
+    // Skip the original initialization
+    // InitProxyMaterial_trampoline()(proxyData);
+}
+
+IMaterial* __fastcall ShaderAPIHooks::FindMaterial_detour(void* thisptr, void* edx, 
+    const char* materialName, const char* textureGroupName, bool complain, const char* complainPrefix) {
+    
+    if (materialName && strstr(materialName, "occlusion") != nullptr) {
+        LogToFile("\n=== Occlusion Proxy Material Request ===\n");
+        LogToFile("FindMaterial called for: %s\n", materialName);
+        LogToFile("Return Address: %p\n", _ReturnAddress());
+        
+        // Log stack trace
+        void* callStack[32];
+        DWORD framesWritten = CaptureStackBackTrace(0, 32, callStack, nullptr);
+        LogToFile("Call Stack:\n");
+        LogStackTrace(callStack, framesWritten);
+        
+        LogToFile("=== End Occlusion Proxy Request ===\n\n");
+        return g_original_FindMaterial(thisptr, edx, "debug/debugempty", "Other", false, nullptr);
+    }
+    
+    return g_original_FindMaterial(thisptr, edx, materialName, textureGroupName, complain, complainPrefix);
+}
+
+void __fastcall ShaderAPIHooks::BeginRenderPass_detour(IMatRenderContext* thisptr, void* edx, IMaterial* material) {
+    if (!material) {
+        return;
+    }
+
+    const char* matName = material->GetName();
+    if (matName && (
+        strcmp(matName, "engine/occlusionproxy") == 0 ||
+        strstr(matName, "occlusionproxy") != nullptr ||
+        s_inOcclusionProxy)) {
+        
+        LogToFile("\n=== Occlusion Proxy Render Attempt ===\n");
+        LogToFile("BeginRenderPass called for: %s\n", matName);
+        LogToFile("Shader Name: %s\n", material->GetShaderName());
+        LogToFile("Return Address: %p\n", _ReturnAddress());
+        
+        void* callStack[32];
+        DWORD framesWritten = CaptureStackBackTrace(0, 32, callStack, nullptr);
+        LogToFile("Call Stack:\n");
+        LogStackTrace(callStack, framesWritten);
+        
+        LogToFile("=== End Render Attempt ===\n\n");
+        return;
+    }
+
+    g_original_BeginRenderPass(thisptr, edx, material);
+}
+
+// Add implementation of LoadMaterial_detour:
+IMaterial* __fastcall ShaderAPIHooks::LoadMaterial_detour(void* thisptr, void* edx, 
+    const char* materialName, const char* textureGroupName) {
+    
+    if (materialName && (
+        strcmp(materialName, "engine/occlusionproxy") == 0 ||
+        strstr(materialName, "occlusionproxy") != nullptr)) {
+        
+        LogToFile("\n=== Occlusion Proxy Load Attempt ===\n");
+        LogToFile("LoadMaterial called for: %s\n", materialName);
+        LogToFile("Texture Group: %s\n", textureGroupName ? textureGroupName : "none");
+        LogToFile("Return Address: %p\n", _ReturnAddress());
+        
+        void* callStack[32];
+        DWORD framesWritten = CaptureStackBackTrace(0, 32, callStack, nullptr);
+        LogToFile("Call Stack:\n");
+        LogStackTrace(callStack, framesWritten);
+        
+        LogToFile("=== End Load Attempt ===\n\n");
+        
+        s_inOcclusionProxy = true;
+        IMaterial* replacement = g_original_LoadMaterial(thisptr, "debug/debugempty", "Other");
+        s_inOcclusionProxy = false;
+        return replacement;
+    }
+
+    return g_original_LoadMaterial(thisptr, materialName, textureGroupName);
+}
+
+
 HRESULT __stdcall ShaderAPIHooks::SetVertexShaderConstantF_detour(
     IDirect3DDevice9* device,
     UINT StartRegister,
@@ -435,7 +975,7 @@ HRESULT __stdcall ShaderAPIHooks::SetVertexShaderConstantF_detour(
     
     __try {
         if (s_state.isProcessingParticle || IsParticleSystem()) {
-            if (!ValidateShaderConstants(pConstantData, Vector4fCount)) {
+            if (!ValidateShaderConstants(pConstantData, Vector4fCount, nullptr)) { // Add nullptr here
                 Warning("[Shader Fixes] Blocked invalid shader constants for %s\n",
                     s_state.lastMaterialName.c_str());
                 return D3D_OK;
@@ -459,6 +999,14 @@ HRESULT __stdcall ShaderAPIHooks::SetStreamSource_detour(
     UINT Stride) {
     
     __try {
+        // Skip occlusion proxy
+        if (materials && materials->GetRenderContext()) {
+            IMaterial* currentMaterial = materials->GetRenderContext()->GetCurrentMaterial();
+            if (IsOcclusionProxy(currentMaterial)) {
+                return D3D_OK;
+            }
+        }
+
         if (s_state.isProcessingParticle || IsParticleSystem()) {
             if (pStreamData && !ValidateParticleVertexBuffer(pStreamData, Stride)) {
                 Warning("[Shader Fixes] Blocked invalid vertex buffer for %s\n",
@@ -480,6 +1028,13 @@ HRESULT __stdcall ShaderAPIHooks::SetVertexShader_detour(
     IDirect3DVertexShader9* pShader) {
     
     __try {
+        if (materials && materials->GetRenderContext()) {
+            IMaterial* currentMaterial = materials->GetRenderContext()->GetCurrentMaterial();
+            if (IsOcclusionProxy(currentMaterial)) {
+                return D3D_OK;
+            }
+        }
+
         if (s_state.isProcessingParticle || IsParticleSystem()) {
             if (!ValidateVertexShader(pShader)) {
                 Warning("[Shader Fixes] Blocked invalid vertex shader for %s\n",
@@ -501,10 +1056,23 @@ bool ShaderAPIHooks::ValidateVertexBuffer(
     UINT offsetInBytes,
     UINT stride) {
     
+    // Log validation attempt
+    Msg("[Shader Fixes] Validating vertex buffer:\n"
+        "  Offset: %u\n"
+        "  Stride: %u\n"
+        "  Buffer: %p\n",
+        offsetInBytes, stride, pVertexBuffer);
+
     if (!pVertexBuffer) return false;
 
-    D3DVERTEXBUFFER_DESC desc;
-    if (FAILED(pVertexBuffer->GetDesc(&desc))) return false;
+    D3DVERTEXBUFFER_DESC bufferDesc;  // Changed variable name here
+    if (FAILED(pVertexBuffer->GetDesc(&bufferDesc))) return false;
+
+    Msg("[Shader Fixes] Buffer description:\n"
+        "  Size: %u\n"
+        "  FVF: %u\n"
+        "  Type: %d\n",
+        bufferDesc.Size, bufferDesc.FVF, bufferDesc.Type);
 
     // Check for potentially dangerous calculations
     if (stride == 0) {
@@ -512,14 +1080,15 @@ bool ShaderAPIHooks::ValidateVertexBuffer(
         return false;
     }
 
-    if (offsetInBytes >= desc.Size) {
-        Warning("[Shader Fixes] Offset (%u) exceeds buffer size (%u)\n", offsetInBytes, desc.Size);
+    if (offsetInBytes >= bufferDesc.Size) {
+        Warning("[Shader Fixes] Offset (%u) exceeds buffer size (%u)\n", 
+            offsetInBytes, bufferDesc.Size);
         return false;
     }
 
     // Check division safety
-    if (desc.Size > 0 && stride > 0) {
-        UINT vertexCount = desc.Size / stride;
+    if (bufferDesc.Size > 0 && stride > 0) {
+        UINT vertexCount = bufferDesc.Size / stride;
         if (vertexCount == 0) {
             Warning("[Shader Fixes] Invalid vertex count calculation prevented\n");
             return false;
@@ -594,8 +1163,26 @@ bool ShaderAPIHooks::ValidateParticleVertexBuffer(IDirect3DVertexBuffer9* pVerte
     return false;
 }
 
-bool ShaderAPIHooks::ValidateShaderConstants(const float* pConstantData, UINT Vector4fCount) {
+bool ShaderAPIHooks::ValidateShaderConstants(const float* pConstantData, UINT Vector4fCount, const char* shaderName) {
     if (!pConstantData || Vector4fCount == 0) return false;
+
+    // Get current material
+    IMaterial* currentMaterial = nullptr;
+    if (materials && materials->GetRenderContext()) {
+        currentMaterial = materials->GetRenderContext()->GetCurrentMaterial();
+    }
+
+    // Special handling for occlusion proxy
+    bool isOcclusionProxy = currentMaterial && 
+        strcmp(currentMaterial->GetName(), "engine/occlusionproxy") == 0;
+
+    if (isOcclusionProxy) {
+        LogMessage("Validating occlusion proxy constants:\n"
+                  "  Vector4f Count: %d\n"
+                  "  Return Address: %p\n",
+                  Vector4fCount,
+                  _ReturnAddress());
+    }
 
     for (UINT i = 0; i < Vector4fCount * 4; i++) {
         // Check for invalid values
@@ -603,10 +1190,11 @@ bool ShaderAPIHooks::ValidateShaderConstants(const float* pConstantData, UINT Ve
             Warning("[Shader Fixes] Invalid shader constant at index %d: %f\n", i, pConstantData[i]);
             return false;
         }
-        // Check for values that might cause divide by zero
-        if (fabsf(pConstantData[i]) < 1e-6) {
-            Warning("[Shader Fixes] Near-zero shader constant at index %d: %f\n", i, pConstantData[i]);
-            return false;
+
+        // For occlusion proxy, ensure we don't have zero values that might cause division
+        if (isOcclusionProxy && fabsf(pConstantData[i]) < 1e-6) {
+            LogMessage("  Fixing zero constant in occlusion proxy at index %d\n", i);
+            const_cast<float*>(pConstantData)[i] = 1.0f;
         }
     }
 
@@ -651,18 +1239,118 @@ bool ShaderAPIHooks::ValidateVertexShader(IDirect3DVertexShader9* pShader) {
     return true;
 }
 
+bool ShaderAPIHooks::IsOcclusionProxy(IMaterial* material) {
+    if (!material || !material->GetName()) {
+        return false;
+    }
+    return strcmp(material->GetName(), "engine/occlusionproxy") == 0;
+}
+
+void ShaderAPIHooks::HandleOcclusionProxy() {
+    static float lastHandleTime = 0;
+    float currentTime = GetTickCount64() / 1000.0f;
+
+    // Only handle once per second to avoid spam
+    if (currentTime - lastHandleTime < 1.0f) {
+        return;
+    }
+    lastHandleTime = currentTime;
+
+    if (!materials || !materials->GetRenderContext()) {
+        return;
+    }
+
+    IMaterial* currentMaterial = materials->GetRenderContext()->GetCurrentMaterial();
+    if (!currentMaterial || !currentMaterial->GetName() || 
+        strcmp(currentMaterial->GetName(), "engine/occlusionproxy") != 0) {
+        return;
+    }
+
+    // Try to force a valid shader
+    static const char* const SHADER_ATTEMPTS[] = {
+        "UnlitGeneric",
+        "VertexLitGeneric",
+        "Wireframe",
+        "Debug"
+    };
+    static const size_t SHADER_COUNT = sizeof(SHADER_ATTEMPTS) / sizeof(SHADER_ATTEMPTS[0]);
+
+    bool shaderSet = false;
+    for (size_t i = 0; i < SHADER_COUNT; i++) {
+        KeyValues* pKeyValues = new KeyValues(SHADER_ATTEMPTS[i]);
+        if (!pKeyValues) {
+            continue;
+        }
+
+        pKeyValues->SetString("$basetexture", "dev/flat");
+        pKeyValues->SetInt("$translucent", 0);
+        pKeyValues->SetInt("$nocull", 1);
+        pKeyValues->SetInt("$ignorez", 0);
+        
+        // Call SetShaderAndParams without checking its return value
+        currentMaterial->SetShaderAndParams(pKeyValues);
+        
+        // Check if the shader was successfully set by verifying the shader name
+        const char* currentShader = currentMaterial->GetShaderName();
+        shaderSet = (currentShader && strcmp(currentShader, SHADER_ATTEMPTS[i]) == 0);
+        
+        pKeyValues->deleteThis();
+        
+        if (shaderSet) {
+            LogMessage("Successfully set shader '%s' for occlusion proxy\n", SHADER_ATTEMPTS[i]);
+            break;
+        }
+    }
+
+    if (!shaderSet) {
+        Warning("[Shader Fixes] Failed to set any shader for occlusion proxy\n");
+    }
+
+    // Force immediate update
+    currentMaterial->Refresh();
+    
+    // Log after refresh
+    LogMessage("Applied occlusion proxy fixes:\n"
+              "  Material: %s\n"
+              "  Shader: %s\n"
+              "  Return Address: %p\n",
+              currentMaterial->GetName(),
+              currentMaterial->GetShaderName(),
+              _ReturnAddress());
+}
+
+
 bool ShaderAPIHooks::IsParticleSystem() {
     try {
-        if (!materials) return false;
+        if (!materials) {
+            return false;
+        }
 
         IMatRenderContext* renderContext = materials->GetRenderContext();
-        if (!renderContext) return false;
+        if (!renderContext) {
+            return false;
+        }
 
         IMaterial* currentMaterial = renderContext->GetCurrentMaterial();
-        if (!currentMaterial) return false;
+        if (!currentMaterial) {
+            return false;
+        }
 
         const char* materialName = currentMaterial->GetName();
         const char* shaderName = currentMaterial->GetShaderName();
+        
+        // Make sure we check for null before strcmp
+        if (materialName && strcmp(materialName, "engine/occlusionproxy") == 0) {
+            HandleOcclusionProxy();
+            if (shaderName) {
+                LogMessage("Occlusion proxy material in use:\n"
+                          "  Return Address: %p\n"
+                          "  Shader: %s\n",
+                          _ReturnAddress(),
+                          shaderName);
+            }
+            return true;
+        }
 
         UpdateShaderState(materialName, shaderName);
 
