@@ -7,6 +7,12 @@ if CLIENT then
         require((BRANCH == "x86-64" or BRANCH == "chromium" ) and "RTXFixesBinary" or "RTXFixesBinary_32bit")
     end)
 
+    hook.Add("Think", "MaterialConverter_Cleanup", function()
+        if (#m_materialCache > 1000) then  // Arbitrary threshold
+            CleanupCache()
+        end
+    end)
+
     if not success then
         ErrorNoHalt("[RTX Material Fixes] Failed to load module: ", err, "\n")
         return

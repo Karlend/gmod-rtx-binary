@@ -183,21 +183,13 @@ GMOD_MODULE_OPEN() {
     try {
         Msg("[RTX Remix Fixes 2] - Module loaded!\n"); 
 
-        // Get the engine factory
-        CreateInterfaceFn engineFactory = Sys_GetFactory("engine.dll");
-        if (!engineFactory) {
-            Error("[Interface Debug] Failed to get engine factory\n");
-            return 0;
-        }
-        Msg("[Interface Debug] Got engine factory at %p\n", engineFactory);
-
-        // Get the material system factory
+        // Get the interface factory
         CreateInterfaceFn materialSystemFactory = Sys_GetFactory("materialsystem.dll");
         if (!materialSystemFactory) {
             Error("[Interface Debug] Failed to get material system factory\n");
             return 0;
         }
-        Msg("[Interface Debug] Got material system factory at %p\n", materialSystemFactory);
+        Msg("[Interface Debug] Got material system factory\n");
 
         // Try different material system versions
         const char* materialSystemVersions[] = {
@@ -219,11 +211,9 @@ GMOD_MODULE_OPEN() {
         }
 
         if (!materialSystemRaw) {
-            Error("[Interface Debug] Failed to get material system interface with any version\n");
+            Error("[Interface Debug] Failed to get material system interface\n");
             return 0;
         }
-
-        Msg("[Interface Debug] Successfully got material system with version: %s\n", successVersion);
 
         // Cast to IMaterialSystem
         materials = static_cast<IMaterialSystem*>(materialSystemRaw);
@@ -232,88 +222,55 @@ GMOD_MODULE_OPEN() {
             return 0;
         }
 
-        Msg("[Interface Debug] Material system interface initialized at %p\n", materials);
+        Msg("[Interface Debug] Successfully got material system with version: %s\n", successVersion);
 
-        // Test material system functionality
-        IMaterial* testMaterial = materials->FindMaterial("debug/debugempty", TEXTURE_GROUP_OTHER);
+        // Initialize material converter
+        if (!MaterialConverter::Instance().Initialize()) {
+            Error("[RTX Fixes] Failed to initialize material converter\n");
+            return 0;
+        }
+
+        IMaterial* testMaterial = materials->FindMaterial("debug/debugempty", TEXTURE_GROUP_OTHER, false);
         if (!testMaterial) {
-            Error("[Interface Debug] Failed to find test material\n");
+            Error("[RTX Fixes] Failed to get test material\n");
+            return 0;
+        }
+        testMaterial->IncrementReferenceCount();  // Keep it from being deleted
+
+        // Verify the shader functions are accessible
+        const char* shaderName = testMaterial->GetShaderName();
+        if (!shaderName) {
+            Error("[RTX Fixes] Failed to get shader name from test material\n");
             return 0;
         }
 
-        Msg("[Interface Debug] Successfully tested material system functionality\n");
-
-        if (!MaterialConverter::VerifyMaterialSystem()) {
-            Error("[RTX Fixes] Material system verification failed\n");
+        // Set up the hook
+        void** vtable = *reinterpret_cast<void***>(materials);
+        if (!vtable) {
+            Error("[Hook Debug] Failed to get vtable\n");
             return 0;
         }
 
-        Msg("[Hook Debug] Starting material system hook setup...\n");
-        Msg("[Hook Debug] Material system interface: %p\n", materials);
-
-        try {
-            void** vtable = *reinterpret_cast<void***>(materials);
-            if (!vtable) {
-                Error("[Hook Debug] Failed to get vtable - null pointer\n");
-                return 0;
-            }
-            Msg("[Hook Debug] Found vtable at %p\n", vtable);
-
-            // Log vtable entries
-            for (int i = 80; i < 86; i++) {
-                Msg("[Hook Debug] vtable[%d] = %p\n", i, vtable[i]);
-            }
-
-            void* findMaterialFunc = vtable[83];
-            if (!findMaterialFunc) {
-                Error("[Hook Debug] FindMaterial function pointer is null\n");
-                return 0;
-            }
-            Msg("[Hook Debug] Found FindMaterial at %p\n", findMaterialFunc);
-
-            static Detouring::Hook findMaterialHook;
-            Detouring::Hook::Target target(findMaterialFunc);
-
-            Msg("[Hook Debug] Creating detour...\n");
-            if (!findMaterialHook.Create(target, MaterialSystem_FindMaterial_detour)) {
-                Error("[Hook Debug] Failed to create hook\n");
-                return 0;
-            }
-            
-            g_original_FindMaterial = findMaterialHook.GetTrampoline<FindMaterial_t>();
-            if (!g_original_FindMaterial) {
-                Error("[Hook Debug] Failed to get trampoline function\n");
-                return 0;
-            }
-
-            findMaterialHook.Enable();
-            Msg("[Hook Debug] Hook enabled successfully\n");
-
-            // Test the hook
-            IMaterial* testMat = materials->FindMaterial("debug/debugempty", TEXTURE_GROUP_OTHER, true);
-            if (!testMat) {
-                Error("[Hook Debug] Hook test failed - couldn't find test material\n");
-                return 0;
-            }
-            
-            Msg("[Hook Debug] Hook test successful\n");
-
-            if (!MaterialConverter::Instance().Initialize()) {
-                Error("[Hook Debug] Failed to initialize material converter\n");
-                return 0;
-            }
-
-            Msg("[RTX Fixes] Module initialization completed successfully\n");
-            return 1;  // Return 1 for success
-        }
-        catch (const std::exception& e) {
-            Error("[Hook Debug] Exception during hook setup: %s\n", e.what());
+        // Hook FindMaterial (index 83)
+        void* findMaterialFunc = vtable[83];
+        if (!findMaterialFunc) {
+            Error("[Hook Debug] FindMaterial function pointer is null\n");
             return 0;
         }
-        catch (...) {
-            Error("[Hook Debug] Unknown exception during hook setup\n");
+
+        static Detouring::Hook findMaterialHook;
+        Detouring::Hook::Target target(findMaterialFunc);
+        
+        if (!findMaterialHook.Create(target, MaterialSystem_FindMaterial_detour)) {
+            Error("[Hook Debug] Failed to create hook\n");
             return 0;
         }
+
+        g_original_FindMaterial = findMaterialHook.GetTrampoline<FindMaterial_t>();
+        findMaterialHook.Enable();
+
+        Msg("[RTX Fixes] Material system hook installed successfully\n");
+        return 1;
     }
     catch (...) {
         Error("[RTX] Exception in module initialization\n");
@@ -324,10 +281,7 @@ GMOD_MODULE_OPEN() {
 GMOD_MODULE_CLOSE() {
     try {
         Msg("[RTX] Shutting down module...\n");
-
-                // Shutdown shader protection
-        //ShaderAPIHooks::Instance().Shutdown();
-
+        // Nothing special needed for cleanup now
         Msg("[RTX] Module shutdown complete\n");
         return 0;
     }

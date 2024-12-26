@@ -1,8 +1,6 @@
 #include "material_converter.h"
 #include <algorithm>
 #include <cctype>
-#include <platform.h>
-#include "utils/interfaces.h"
 
 FindMaterial_t g_original_FindMaterial = nullptr;
 
@@ -17,137 +15,32 @@ bool MaterialConverter::Initialize() {
         return false;
     }
 
-    // Test material system functionality
-    IMaterial* testMat = materials->FindMaterial("debug/debugempty", TEXTURE_GROUP_OTHER);
-    if (!testMat) {
-        Warning("[Material Converter] Failed to find test material\n");
-        return false;
-    }
-
-    Msg("[Material Converter] Successfully initialized with material system at %p\n", materials);
+    Msg("[Material Converter] Successfully initialized\n");
     return true;
 }
 
-bool MaterialConverter::IsProblematicMaterial(const char* materialName) {
-    static bool firstCheck = true;
-    if (firstCheck) {
-        Msg("[Material Converter] First material check: %s\n", materialName ? materialName : "null");
-        firstCheck = false;
-    }
+bool MaterialConverter::IsBlockedShader(const char* shaderName) const {
+    if (!shaderName) return false;
 
+    std::string lowerName = shaderName;
+    std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+
+    return m_blockedShaders.find(lowerName) != m_blockedShaders.end();
+}
+
+bool MaterialConverter::IsBlockedMaterial(const char* materialName) const {
     if (!materialName) return false;
 
-    // Convert to lowercase for case-insensitive comparison
     std::string lowerName = materialName;
     std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
 
-    // Check against problematic patterns
-    for (const auto& pattern : m_problematicPatterns) {
-        if (lowerName.find(pattern) != std::string::npos) {
-            Msg("[Material Converter] Found problematic pattern '%s' in material '%s'\n", 
-                pattern.c_str(), materialName);
+    for (const auto& prefix : m_blockedMaterialPrefixes) {
+        if (lowerName.find(prefix) == 0) {
             return true;
         }
     }
 
     return false;
-}
-
-IMaterial* MaterialConverter::ProcessMaterial(IMaterial* material) {
-    if (!material) return nullptr;
-
-    const char* materialName = material->GetName();
-    if (!materialName) return material;
-
-    // Check if we should process this material
-    if (!ShouldProcessMaterial(materialName)) {
-        return material;
-    }
-
-    // Log the processing
-    LogMaterialProcess(materialName, true);
-
-    // Get or create safe version
-    return GetSafeMaterial(materialName);
-}
-
-bool MaterialConverter::ShouldProcessMaterial(const char* materialName) {
-    if (!materialName) return false;
-
-    // Check cache first
-    std::unordered_map<std::string, IMaterial*>::iterator it = m_materialCache.find(materialName);
-    if (it != m_materialCache.end()) {
-        return true;
-    }
-
-    return IsProblematicMaterial(materialName);
-}
-
-void MaterialConverter::LogMaterialProcess(const char* materialName, bool wasProcessed) {
-    static float lastLogTime = 0.0f;
-    float currentTime = Plat_FloatTime();
-
-    // Only log every second to avoid spam
-    if (currentTime - lastLogTime < 1.0f) return;
-
-    Msg("[Material Converter] %s material: %s\n",
-        wasProcessed ? "Processing" : "Skipping",
-        materialName ? materialName : "unknown");
-
-    lastLogTime = currentTime;
-}
-
-IMaterial* MaterialConverter::GetSafeMaterial(const char* originalName) {
-    // Check cache
-    std::unordered_map<std::string, IMaterial*>::iterator it = m_materialCache.find(originalName);
-    if (it != m_materialCache.end()) {
-        return it->second;
-    }
-
-    // Create safe material
-    KeyValues* kv = new KeyValues("UnlitGeneric");
-    kv->SetString("$basetexture", "debug/debugempty");
-    kv->SetInt("$translucent", 1);
-    kv->SetInt("$vertexalpha", 1);
-    kv->SetInt("$vertexcolor", 1);
-
-    char safeName[512];
-    snprintf(safeName, sizeof(safeName), "__safe_%s", originalName);
-
-    IMaterial* safeMaterial = materials->CreateMaterial(safeName, kv);
-    kv->deleteThis();
-
-    // Cache the result
-    if (safeMaterial) {
-        m_materialCache[originalName] = safeMaterial;
-    }
-
-    return safeMaterial;
-}
-
-IMaterial* __fastcall MaterialSystem_FindMaterial_detour(void* thisptr, void* edx, 
-    const char* materialName, const char* textureGroupName, bool complain, const char* complainPrefix) {
-    
-    // Always log the first call to verify the hook is working
-    static bool firstCall = true;
-    if (firstCall) {
-        Msg("[Hook Debug] First call to FindMaterial detour!\n");
-        Msg("[Hook Debug] Material: %s\n", materialName ? materialName : "null");
-        Msg("[Hook Debug] Group: %s\n", textureGroupName ? textureGroupName : "null");
-        firstCall = false;
-    }
-
-    // Log every problematic material
-    if (materialName && MaterialConverter::Instance().IsProblematicMaterial(materialName)) {
-        Msg("[Material Converter] Found problematic material: %s\n", materialName);
-    }
-
-    if (!g_original_FindMaterial) {
-        Error("[Hook Debug] Original FindMaterial function is null!\n");
-        return nullptr;
-    }
-
-    return g_original_FindMaterial(thisptr, materialName, textureGroupName, complain);
 }
 
 bool MaterialConverter::VerifyMaterialSystem() {
@@ -164,7 +57,6 @@ bool MaterialConverter::VerifyMaterialSystem() {
             return false;
         }
 
-        // Try to call a simple function
         IMaterial* test = materials->FindMaterial("debug/debugempty", TEXTURE_GROUP_OTHER);
         if (!test) {
             Msg("[Material Debug] Failed to find test material\n");
@@ -177,5 +69,76 @@ bool MaterialConverter::VerifyMaterialSystem() {
     catch (...) {
         Msg("[Material Debug] Exception while verifying material system\n");
         return false;
+    }
+}
+
+IMaterial* __fastcall MaterialSystem_FindMaterial_detour(void* thisptr, void* edx, 
+    const char* materialName, const char* textureGroupName, bool complain, const char* complainPrefix) {
+    
+    try {
+        static IMaterial* fallbackMaterial = nullptr;
+        static bool firstCall = true;
+
+        // Initialize fallback material once
+        if (!fallbackMaterial) {
+            fallbackMaterial = g_original_FindMaterial(thisptr, "debug/debugempty", TEXTURE_GROUP_OTHER, false);
+            if (!fallbackMaterial) {
+                Warning("[Material Converter] Failed to get fallback material\n");
+                return nullptr;
+            }
+            fallbackMaterial->IncrementReferenceCount();
+        }
+
+        if (firstCall) {
+            Msg("[Hook Debug] First call to FindMaterial detour!\n");
+            Msg("[Hook Debug] Material: %s\n", materialName ? materialName : "null");
+            Msg("[Hook Debug] Group: %s\n", textureGroupName ? textureGroupName : "null");
+            firstCall = false;
+        }
+
+        // Early checks
+        if (!materialName) {
+            return fallbackMaterial;
+        }
+
+        // Check if it's a problematic material name pattern
+        if (MaterialConverter::Instance().IsBlockedMaterial(materialName)) {
+            Msg("[Material Converter] Blocking problematic material: %s\n", materialName);
+            return fallbackMaterial;
+        }
+
+        // Get the original material
+        IMaterial* material = nullptr;
+        try {
+            material = g_original_FindMaterial(thisptr, materialName, textureGroupName, false);  // Set complain to false
+        }
+        catch (...) {
+            Warning("[Material Converter] Exception getting material %s\n", materialName);
+            return fallbackMaterial;
+        }
+
+        if (!material || material->IsErrorMaterial()) {
+            return fallbackMaterial;
+        }
+
+        // Check shader type
+        try {
+            const char* shaderName = material->GetShaderName();
+            if (shaderName && MaterialConverter::Instance().IsBlockedShader(shaderName)) {
+                Msg("[Material Converter] Blocking problematic shader: %s for material %s\n", 
+                    shaderName, materialName);
+                return fallbackMaterial;
+            }
+        }
+        catch (...) {
+            Warning("[Material Converter] Exception checking shader for %s\n", materialName);
+            return fallbackMaterial;
+        }
+
+        return material;
+    }
+    catch (...) {
+        Warning("[Material Converter] Top-level exception in FindMaterial detour\n");
+        return g_original_FindMaterial(thisptr, "debug/debugempty", TEXTURE_GROUP_OTHER, false);
     }
 }

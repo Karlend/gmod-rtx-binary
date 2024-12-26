@@ -7,7 +7,6 @@
 #include <tier1/KeyValues.h>
 #include <detouring/hook.hpp>
 #include <unordered_set>
-#include <unordered_map>
 #include <string>
 
 typedef IMaterial* (__thiscall* FindMaterial_t)(void* thisptr, const char* materialName, const char* textureGroupName, bool complain);
@@ -15,42 +14,49 @@ extern FindMaterial_t g_original_FindMaterial;
 
 class MaterialConverter {
 public:
-    static bool VerifyMaterialSystem();
     static MaterialConverter& Instance();
+    static bool VerifyMaterialSystem();
 
-    // Core functions
     bool Initialize();
-    bool IsProblematicMaterial(const char* materialName);
-    IMaterial* ProcessMaterial(IMaterial* material);
+    bool IsBlockedShader(const char* shaderName) const;
+    bool IsBlockedMaterial(const char* materialName) const;
 
 private:
     MaterialConverter() = default;
     ~MaterialConverter() = default;
 
-    // Problematic material patterns
-    std::unordered_set<std::string> m_problematicPatterns = {
-        "fire",
-        "explosion",
-        "flame",
-        "burn",
-        "particle",
-        "effects",
-        "smoke",
-        "spark",
-        "beam",
+    // Lists of blocked shaders and materials
+    const std::unordered_set<std::string> m_blockedShaders = {
+        "spritecard",
+        "wireframe",
+        "wireframe_dx9",
+        "sdk_bloom",
+        "sdk_bloomadd",
+        "sdk_blur",
+        "sdk_water",
+        "sdk_eye_refract",
+        "sdk_shadowbuild",
+        "sdk_sprite",
         "sprite",
-        "trail",
-        "engine",
-        "occlusionproxy"
+        "unlittwotexture",
+        "vertexlitgeneric",
+        "worldtwotextureblend",
+        "lightmappedgeneric"
     };
 
-    // Material processing
-    bool ShouldProcessMaterial(const char* materialName);
-    void LogMaterialProcess(const char* materialName, bool wasProcessed);
-    IMaterial* GetSafeMaterial(const char* originalName);
-
-    // Cache processed materials
-    std::unordered_map<std::string, IMaterial*> m_materialCache;
+    const std::unordered_set<std::string> m_blockedMaterialPrefixes = {
+        "particle/",
+        "effects/",
+        "sprites/",
+        "engine/",
+        "debug/",
+        "shaders/",
+        "pp/",
+        "models/effects/",
+        "materials/effects/",
+        "materialsrc/",
+        "materials/overlays/"
+    };
 };
 
 // Hook function
