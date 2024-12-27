@@ -39,6 +39,7 @@ private:
         LightProperties properties;
         float lastUpdateTime;
         bool needsUpdate;
+        uint64_t hash;
     };
 
     remix::Interface* m_remix;

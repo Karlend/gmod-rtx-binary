@@ -41,17 +41,11 @@ void RTXLightManager::Shutdown() {
 }
 
 remixapi_LightHandle RTXLightManager::CreateLight(const LightProperties& props) {
-    if (!m_initialized || !m_remix) {
-        LogMessage("Cannot create light: Manager not initialized\n");
-        return nullptr;
-    }
+    if (!m_initialized || !m_remix) return nullptr;
 
     EnterCriticalSection(&m_lightCS);
     
     try {
-        LogMessage("Creating light at (%f, %f, %f) with size %f\n", 
-            props.x, props.y, props.z, props.size);
-
         auto sphereLight = remixapi_LightInfoSphereEXT{};
         sphereLight.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
         sphereLight.position = {props.x, props.y, props.z};
@@ -59,10 +53,12 @@ remixapi_LightHandle RTXLightManager::CreateLight(const LightProperties& props) 
         sphereLight.shaping_hasvalue = false;
         memset(&sphereLight.shaping_value, 0, sizeof(sphereLight.shaping_value));
 
+        uint64_t hash = GenerateLightHash();
+        
         auto lightInfo = remixapi_LightInfo{};
         lightInfo.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
         lightInfo.pNext = &sphereLight;
-        lightInfo.hash = GenerateLightHash();  // Ensure unique hash for each light
+        lightInfo.hash = hash;
         lightInfo.radiance = {
             props.r * props.brightness,
             props.g * props.brightness,
@@ -71,7 +67,6 @@ remixapi_LightHandle RTXLightManager::CreateLight(const LightProperties& props) 
 
         auto result = m_remix->CreateLight(lightInfo);
         if (!result) {
-            LogMessage("Remix CreateLight failed\n");
             LeaveCriticalSection(&m_lightCS);
             return nullptr;
         }
@@ -81,21 +76,19 @@ remixapi_LightHandle RTXLightManager::CreateLight(const LightProperties& props) 
         managedLight.properties = props;
         managedLight.lastUpdateTime = GetTickCount64() / 1000.0f;
         managedLight.needsUpdate = false;
+        managedLight.hash = hash;  // Store the hash
 
-        // Add to lights vector
         m_lights.push_back(managedLight);
-        
-        LogMessage("Successfully created light handle: %p (Total lights: %d)\n", 
-            managedLight.handle, m_lights.size());
 
         LeaveCriticalSection(&m_lightCS);
         return managedLight.handle;
     }
     catch (...) {
-        LogMessage("Exception in CreateLight\n");
-        LeaveCriticalSection(&m_lightCS);
-        return nullptr;
+        Msg("[RTX Light Manager] Exception in CreateLight\n");
     }
+
+    LeaveCriticalSection(&m_lightCS);
+    return nullptr;
 }
 
 // Add a method to generate unique hashes
@@ -114,24 +107,43 @@ bool RTXLightManager::UpdateLight(remixapi_LightHandle handle, const LightProper
             [handle](const ManagedLight& light) { return light.handle == handle; });
 
         if (it != m_lights.end()) {
-            // Create new light with updated properties
-            auto sphereLight = CreateSphereLight(props);
-            auto lightInfo = CreateLightInfo(sphereLight);
-            
+            // Create new light info
+            auto sphereLight = remixapi_LightInfoSphereEXT{};
+            sphereLight.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+            sphereLight.position = {props.x, props.y, props.z};
+            sphereLight.radius = props.size;
+            sphereLight.shaping_hasvalue = false;
+            memset(&sphereLight.shaping_value, 0, sizeof(sphereLight.shaping_value));
+
+            auto lightInfo = remixapi_LightInfo{};
+            lightInfo.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+            lightInfo.pNext = &sphereLight;
+            lightInfo.hash = GenerateLightHash();
+            lightInfo.radiance = {
+                props.r * props.brightness,
+                props.g * props.brightness,
+                props.b * props.brightness
+            };
+
+            // Create new light
             auto result = m_remix->CreateLight(lightInfo);
             if (!result) {
+                LogMessage("Failed to create new light during update\n");
                 LeaveCriticalSection(&m_lightCS);
                 return false;
             }
 
             // Destroy old light
-            m_remix->DestroyLight(it->handle);
-            
+            if (it->handle) {
+                m_remix->DestroyLight(it->handle);
+            }
+
             // Update managed light
             it->handle = result.value();
             it->properties = props;
             it->lastUpdateTime = GetTickCount64() / 1000.0f;
             it->needsUpdate = false;
+            it->hash = lightInfo.hash;
 
             LeaveCriticalSection(&m_lightCS);
             return true;
