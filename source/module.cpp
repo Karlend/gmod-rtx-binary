@@ -9,6 +9,7 @@
 #include <d3d9.h>
 #include "rtx_lights/rtx_light_manager.h"
 #include "shader_fixes/shader_hooks.h"
+#include "render_modes/render_mode_manager.h"
 
 #ifdef GMOD_MAIN
 extern IMaterialSystem* materials = NULL;
@@ -182,8 +183,17 @@ GMOD_MODULE_OPEN() {
     try {
         Msg("[RTX Remix Fixes 2] - Module loaded!\n"); 
 
-        // Initialize shader protection
-        ShaderAPIHooks::Instance().Initialize();
+        // // Initialize shader protection
+        // ShaderAPIHooks::Instance().Initialize();
+
+        // Initialize render mode manager
+        auto sourceDevice = static_cast<IDirect3DDevice9Ex*>(FindD3D9Device());
+        if (!sourceDevice) {
+            LUA->ThrowError("[RTX] Failed to find D3D9 device");
+            return 0;
+        }
+
+        RenderModeManager::Instance().Initialize(sourceDevice);
 
         // Find Source's D3D9 device
         auto sourceDevice = static_cast<IDirect3DDevice9Ex*>(FindD3D9Device());
@@ -225,6 +235,23 @@ GMOD_MODULE_OPEN() {
             
             LUA->PushCFunction(DrawRTXLights);
             LUA->SetField(-2, "DrawRTXLights");
+
+            LUA->PushCFunction(SetSelectiveRendering);
+            LUA->SetField(-2, "SetSelectiveRendering");     
+
+            LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
+                
+            LUA->PushCFunction([](GarrysMod::Lua::ILuaBase* LUA) -> int {
+                RenderModeManager::Instance().EnableFVFForWorld(LUA->GetBool(1));
+                return 0;
+            });
+            LUA->SetField(-2, "EnableWorldFVF");
+                
+            LUA->PushCFunction([](GarrysMod::Lua::ILuaBase* LUA) -> int {
+                RenderModeManager::Instance().EnableFVFForModels(LUA->GetBool(1));
+                return 0;
+            });
+            LUA->SetField(-2, "EnableModelsFVF");
         LUA->Pop();
 
         return 0;
