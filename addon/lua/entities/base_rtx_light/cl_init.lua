@@ -1,22 +1,38 @@
 include("shared.lua")
 
+ENT.HasInitializedLight = false
+ENT.AttemptCount = 0
+ENT.MaxAttempts = 3
+
 function ENT:Initialize()
     self:SetNoDraw(true)
     self:DrawShadow(false)
+    self.HasInitializedLight = false
+    self.AttemptCount = 0
     
     -- Delay light creation to ensure networked values are received
     timer.Simple(0.1, function()
-        if IsValid(self) then
+        if IsValid(self) and not self.HasInitializedLight then
             self:CreateRTXLight()
         end
     end)
 end
 
 function ENT:CreateRTXLight()
+    -- Prevent multiple creation attempts
+    if self.HasInitializedLight then return end
+    
+    -- Increment attempt counter
+    self.AttemptCount = self.AttemptCount + 1
+    if self.AttemptCount > self.MaxAttempts then
+        ErrorNoHalt(string.format("[RTX Light] Max creation attempts reached for entity: %d\n", self:EntIndex()))
+        return
+    end
+
+    -- Clean up existing light if any
     if self.rtxLightHandle then
         pcall(function() 
             DestroyRTXLight(self.rtxLightHandle)
-            print("[RTX Light] Destroyed existing light handle:", self.rtxLightHandle)
         end)
         self.rtxLightHandle = nil
     end
@@ -28,96 +44,97 @@ function ENT:CreateRTXLight()
     local g = self:GetLightG()
     local b = self:GetLightB()
 
+    -- Validate values before creation
+    if brightness <= 0 or size <= 0 then
+        return
+    end
+
     print(string.format("[RTX Light Entity] Creating light - Pos: %.2f,%.2f,%.2f, Size: %f, Brightness: %f, Color: %d,%d,%d",
         pos.x, pos.y, pos.z, size, brightness, r, g, b))
 
-    local success, handle = pcall(function()
-        return CreateRTXLight(
-            pos.x, 
-            pos.y, 
-            pos.z,
-            size,
-            brightness,
-            r,
-            g,
-            b
-        )
-    end)
+    local handle = CreateRTXLight(
+        pos.x, 
+        pos.y, 
+        pos.z,
+        size,
+        brightness,
+        r,
+        g,
+        b
+    )
 
-    if success and handle then
+    if handle and handle > 0 then
         self.rtxLightHandle = handle
         self.lastUpdatePos = pos
         self.lastUpdateTime = CurTime()
+        self.HasInitializedLight = true
         print("[RTX Light] Successfully created light with handle:", handle)
     else
-        ErrorNoHalt("[RTX Light] Failed to create light: ", tostring(handle), "\n")
-    end
-end
-
-function ENT:OnNetworkVarChanged(name, old, new)
-    if IsValid(self) and self.rtxLightHandle then
-        self:CreateRTXLight() -- Recreate light with new properties
+        ErrorNoHalt("[RTX Light] Failed to create light\n")
     end
 end
 
 function ENT:Think()
+    if not self.HasInitializedLight then
+        -- Only try to create light once values are networked
+        if self:GetLightBrightness() > 0 and self:GetLightSize() > 0 then
+            self:CreateRTXLight()
+        end
+        return
+    end
+
     if not self.nextUpdate then self.nextUpdate = 0 end
     if CurTime() < self.nextUpdate then return end
     
     -- Only update if we have a valid light
-    if self.rtxLightHandle then
+    if self.rtxLightHandle and self.rtxLightHandle > 0 then
         local pos = self:GetPos()
         
         -- Check if we actually need to update
         if not self.lastUpdatePos or pos:DistToSqr(self.lastUpdatePos) > 1 then
-            local success, newHandle = pcall(function()
-                return UpdateRTXLight(
-                    self.rtxLightHandle,
-                    pos.x, pos.y, pos.z,
-                    self:GetLightSize() / 10,  -- Scale down size
-                    self:GetLightBrightness() / 100,  -- Convert percentage to 0-1
-                    self:GetLightR(),
-                    self:GetLightG(),
-                    self:GetLightB()
-                )
-            end)
+            local newHandle = UpdateRTXLight(
+                self.rtxLightHandle,
+                pos.x, pos.y, pos.z,
+                self:GetLightSize(),
+                self:GetLightBrightness(),
+                self:GetLightR(),
+                self:GetLightG(),
+                self:GetLightB()
+            )
             
-            if success and newHandle then
+            if newHandle and newHandle > 0 then
                 self.rtxLightHandle = newHandle
                 self.lastUpdatePos = pos
                 self.lastUpdateTime = CurTime()
             else
                 -- If update failed, try to recreate the light
-                self:CreateRTXLight()
+                self.HasInitializedLight = false
+                self.AttemptCount = 0
+                self.rtxLightHandle = nil
             end
         end
     else
-        -- Try to recreate light if it's missing
-        self:CreateRTXLight()
+        -- Try to recreate light if handle is invalid
+        self.HasInitializedLight = false
+        self.AttemptCount = 0
+        self.rtxLightHandle = nil
     end
     
     self.nextUpdate = CurTime() + 0.1  -- Update every 0.1 seconds
 end
 
 function ENT:OnRemove()
-    if self.rtxLightHandle then
+    if self.rtxLightHandle and self.rtxLightHandle > 0 then
         print("[RTX Light] Cleaning up light handle:", self.rtxLightHandle)
         pcall(function()
             DestroyRTXLight(self.rtxLightHandle)
         end)
         self.rtxLightHandle = nil
     end
+    self.HasInitializedLight = false
 end
 
-net.Receive("RTXLight_Cleanup", function()
-    local ent = net.ReadEntity()
-    if IsValid(ent) and ent.rtxLightHandle then
-        ent:OnRemove()
-    end
-end)
-
-
--- Simple property menu
+-- Property menu implementation
 function ENT:OpenPropertyMenu()
     if IsValid(self.PropertyPanel) then
         self.PropertyPanel:Remove()
@@ -184,6 +201,15 @@ function ENT:OpenPropertyMenu()
     self.PropertyPanel = frame
 end
 
+-- Network cleanup handler
+net.Receive("RTXLight_Cleanup", function()
+    local ent = net.ReadEntity()
+    if IsValid(ent) then
+        ent:OnRemove()
+    end
+end)
+
+-- Property menu registration
 properties.Add("rtx_light_properties", {
     MenuLabel = "Edit RTX Light",
     Order = 1,
