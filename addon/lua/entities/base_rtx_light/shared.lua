@@ -24,3 +24,12 @@ end
 function ENT:OnVarChanged(name, old, new)
     -- Handle property changes
 end
+
+function ENT:OnVarChanged(name, old, new)
+    if CLIENT then
+        -- Queue an update when networked vars change
+        if self.rtxLightHandle and self.rtxLightHandle > 0 then
+            self:UpdateLight()
+        end
+    end
+end

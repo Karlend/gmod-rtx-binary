@@ -40,9 +40,9 @@ function ENT:CreateRTXLight()
         pos.z,
         size,
         brightness,
-        r,
-        g,
-        b
+        r / 255, -- Convert to 0-1 range for binary module
+        g / 255,
+        b / 255
     )
 
     if handle and handle > 0 then
@@ -65,31 +65,23 @@ function ENT:UpdateLight()
     -- Skip invalid values
     if not (size > 0 and brightness > 0) then return false end
 
-    -- Create new light with updated properties
-    local newHandle = CreateRTXLight(
+    -- Queue update instead of immediate creation
+    QueueRTXLightUpdate(
+        self.rtxLightHandle,
         pos.x, 
         pos.y, 
         pos.z,
         size,
         brightness,
-        r,
-        g,
-        b
+        r / 255,
+        g / 255,
+        b / 255,
+        false -- not forced
     )
 
-    if newHandle and newHandle > 0 then
-        -- Clean up old light after successful creation
-        pcall(function()
-            DestroyRTXLight(self.rtxLightHandle)
-        end)
-        
-        self.rtxLightHandle = newHandle
-        self.lastUpdatePos = pos
-        self.LastUpdateTime = CurTime()
-        return true
-    end
-
-    return false
+    self.lastUpdatePos = pos
+    self.LastUpdateTime = CurTime()
+    return true
 end
 
 function ENT:Think()
@@ -107,6 +99,57 @@ function ENT:Think()
     if not self.lastUpdatePos or pos:DistToSqr(self.lastUpdatePos) > 1 then
         self:UpdateLight()
     end
+end
+
+function ENT:UpdateLight()
+    if not self.rtxLightHandle or self.rtxLightHandle <= 0 then return false end
+    
+    local pos = self:GetPos()
+    local size = self:GetLightSize()
+    local brightness = self:GetLightBrightness()
+    local r = self:GetLightR()
+    local g = self:GetLightG()
+    local b = self:GetLightB()
+
+    -- Skip invalid values
+    if not (size > 0 and brightness > 0) then return false end
+
+    -- Queue update directly using binary module function
+    QueueRTXLightUpdate(
+        self.rtxLightHandle,
+        pos.x, 
+        pos.y, 
+        pos.z,
+        size,
+        brightness,
+        r / 255,
+        g / 255,
+        b / 255,
+        false -- not forced
+    )
+
+    self.lastUpdatePos = pos
+    self.LastUpdateTime = CurTime()
+    return true
+end
+
+-- Update OnPropertyChanged similarly
+function ENT:OnPropertyChanged()
+    if not self.rtxLightHandle or self.rtxLightHandle <= 0 then return end
+    
+    local pos = self:GetPos()
+    QueueRTXLightUpdate(
+        self.rtxLightHandle,
+        pos.x, 
+        pos.y, 
+        pos.z,
+        self:GetLightSize(),
+        self:GetLightBrightness(),
+        self:GetLightR() / 255,
+        self:GetLightG() / 255,
+        self:GetLightB() / 255,
+        true -- force update
+    )
 end
 
 function ENT:OnRemove()
@@ -128,8 +171,21 @@ end)
 
 -- Property menu implementation
 function ENT:OnPropertyChanged()
-    if CurTime() - self.LastUpdateTime < self.UpdateCooldown then return end
-    self:UpdateLight()
+    if not self.rtxLightHandle or self.rtxLightHandle <= 0 then return end
+    
+    local pos = self:GetPos()
+    QueueRTXLightUpdate(
+        self.rtxLightHandle,
+        pos.x, 
+        pos.y, 
+        pos.z,
+        self:GetLightSize(),
+        self:GetLightBrightness(),
+        self:GetLightR() / 255,
+        self:GetLightG() / 255,
+        self:GetLightB() / 255,
+        true -- force update
+    )
 end
 
 -- Property menu

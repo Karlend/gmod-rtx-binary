@@ -124,6 +124,43 @@ LUA_FUNCTION(UpdateRTXLight) {
     }
 }
 
+LUA_FUNCTION(QueueRTXLightUpdate) {
+    try {
+        // Get the handle - convert from number to handle pointer
+        uint64_t handleValue = static_cast<uint64_t>(LUA->CheckNumber(1));
+        remixapi_LightHandle handle = reinterpret_cast<remixapi_LightHandle>(handleValue);
+
+        // Read position
+        float x = static_cast<float>(LUA->CheckNumber(2));
+        float y = static_cast<float>(LUA->CheckNumber(3));
+        float z = static_cast<float>(LUA->CheckNumber(4));
+        float size = static_cast<float>(LUA->CheckNumber(5));
+        float brightness = static_cast<float>(LUA->CheckNumber(6));
+        float r = static_cast<float>(LUA->CheckNumber(7));
+        float g = static_cast<float>(LUA->CheckNumber(8));
+        float b = static_cast<float>(LUA->CheckNumber(9));
+        bool force = LUA->GetBool(10); // Optional parameter, defaults to false in Lua
+
+        RTXLightManager::LightProperties props;
+        props.x = x;
+        props.y = y;
+        props.z = z;
+        props.size = size;
+        props.brightness = brightness;
+        props.r = r;
+        props.g = g;
+        props.b = b;
+
+        RTXLightManager::Instance().QueueLightUpdate(handle, props, force);
+        
+        return 0;
+    }
+    catch (...) {
+        Msg("[RTX Light Module] Exception in QueueRTXLightUpdate\n");
+        return 0;
+    }
+}
+
 LUA_FUNCTION(DestroyRTXLight) {
     try {
         // Convert number back to handle
@@ -245,6 +282,9 @@ GMOD_MODULE_OPEN() {
             
             LUA->PushCFunction(DrawRTXLights);
             LUA->SetField(-2, "DrawRTXLights");
+
+            LUA->PushCFunction(QueueRTXLightUpdate);
+            LUA->SetField(-2, "QueueRTXLightUpdate");
         LUA->Pop();
 
         return 0;
