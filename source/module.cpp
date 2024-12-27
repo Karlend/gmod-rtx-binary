@@ -9,6 +9,7 @@
 #include <d3d9.h>
 #include "rtx_lights/rtx_light_manager.h"
 #include "shader_fixes/shader_hooks.h"
+#include "hotpatching/patch_manager.h"
 
 #ifdef GMOD_MAIN
 extern IMaterialSystem* materials = NULL;
@@ -182,6 +183,15 @@ GMOD_MODULE_OPEN() {
     try {
         Msg("[RTX Remix Fixes 2] - Module loaded!\n"); 
 
+        // Initialize binary patches
+        if (!PatchManager::Instance().Initialize()) {
+            Warning("[RTX Remix Fixes] Failed to initialize binary patches\n");
+        }
+        
+        if (!PatchManager::Instance().ApplyPatches()) {
+            Warning("[RTX Remix Fixes] Failed to apply some binary patches\n");
+        }
+
         // Initialize shader protection
         ShaderAPIHooks::Instance().Initialize();
 
@@ -239,9 +249,13 @@ GMOD_MODULE_CLOSE() {
     try {
         Msg("[RTX] Shutting down module...\n");
 
-                // Shutdown shader protection
+        // Restore original bytes
+        PatchManager::Instance().RestorePatches();
+
+        // Shutdown shader protection
         ShaderAPIHooks::Instance().Shutdown();
         
+        // Shutdown Remix Light Manager
         RTXLightManager::Instance().Shutdown();
 
         if (g_remix) {
