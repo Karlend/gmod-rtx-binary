@@ -22,3 +22,7 @@
 #define FF_VERTEX_TANGENT       0x1000u
 #define FF_VERTEX_BONE_WEIGHTS  0x2000u
 #define FF_VERTEX_BONE_INDEX    0x4000u
+#define FF_VERTEX_BONES        0x8000u  // For skinned meshes
+#define FF_VERTEX_BONEWEIGHT   0x10000u // For skinned meshes
+#define FF_VERTEX_USERDATA     0x20000u // For additional vertex data
+#define FF_VERTEX_MODEL        0x40000u // For model-specific data

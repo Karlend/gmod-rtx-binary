@@ -311,11 +311,37 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
         // Get current material
         IMaterial* material = materials->GetRenderContext()->GetCurrentMaterial();
         if (!material) {
-            result = s_originalDrawIndexedPrimitive(
+            return s_originalDrawIndexedPrimitive(
                 device, PrimitiveType, BaseVertexIndex,
                 MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
-            isProcessing = false;
-            return result;
+        }
+
+        // Determine vertex format based on material type
+        VertexFormat_t format = FF_VERTEX_POSITION | FF_VERTEX_NORMAL | FF_VERTEX_TEXCOORD0;
+        
+        const char* materialName = material->GetName();
+        const char* shaderName = material->GetShaderName();
+
+        // Check for model materials
+        if (strstr(shaderName, "VertexLitGeneric") || 
+            strstr(shaderName, "Model") ||
+            strstr(materialName, "models/")) {
+            
+            format |= FF_VERTEX_COLOR | FF_VERTEX_MODEL;
+            
+            // Check if it's a skinned mesh (has bones)
+            IMaterialVar* boneVar = material->FindVar("$numbones", nullptr);
+            if (boneVar && boneVar->GetIntValue() > 0) {
+                format |= FF_VERTEX_BONES | FF_VERTEX_BONEWEIGHT;
+            }
+        }
+        
+        // Check for GUI materials
+        else if (strstr(shaderName, "UnlitGeneric") ||
+                strstr(materialName, "vgui/") ||
+                strstr(materialName, "gui/")) {
+            format |= FF_VERTEX_COLOR;
+            format &= ~FF_VERTEX_NORMAL; // GUI doesn't need normals
         }
 
         // Check if we should use fixed function

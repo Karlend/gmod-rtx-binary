@@ -19,7 +19,7 @@ namespace MaterialUtil {
             "LightmappedGeneric",
             "VertexLitGeneric",
             "UnlitGeneric",
-            "WorldVertexTransition",
+            "models/"
         };
 
         bool shouldUse = false;

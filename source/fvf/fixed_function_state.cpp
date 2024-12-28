@@ -121,54 +121,74 @@ void FixedFunctionState::SetupFixedFunction(
         // Setup transforms
         SetupTransforms(device, material);
 
-        // Setup render states for proper rendering
+        // Basic render states
         device->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
-        device->SetRenderState(D3DRS_LIGHTING, TRUE);
         device->SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW);
         device->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+        device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+        device->SetRenderState(D3DRS_LIGHTING, TRUE);
+        device->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
+        device->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_ARGB(255, 128, 128, 128));
 
-        // Set material color - using Source's material system
-        float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };  // Default white
-        IMaterialVar* colorVar = material->FindVar("$color", nullptr);
-        if (colorVar && !colorVar->IsDefined()) {  // Changed from IsEmpty
-            Vector4D col;
-            colorVar->GetVecValue(&col.x, 4);  // Get color as Vector4D
-            color[0] = col.x;
-            color[1] = col.y;
-            color[2] = col.z;
-            color[3] = col.w;
-        }
-
-        // Set material properties
+        // Set up basic material properties
         D3DMATERIAL9 mtrl;
         ZeroMemory(&mtrl, sizeof(mtrl));
-        mtrl.Diffuse.r = color[0];
-        mtrl.Diffuse.g = color[1];
-        mtrl.Diffuse.b = color[2];
-        mtrl.Diffuse.a = color[3];
-        mtrl.Ambient = mtrl.Diffuse;
+        mtrl.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
+        mtrl.Ambient = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
         device->SetMaterial(&mtrl);
+
+        // Setup basic light
+        device->SetRenderState(D3DRS_LIGHTING, TRUE);
+        D3DLIGHT9 light;
+        ZeroMemory(&light, sizeof(light));
+        light.Type = D3DLIGHT_DIRECTIONAL;
+        light.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
+        light.Direction = D3DXVECTOR3(0.0f, 0.0f, -1.0f);
+        device->SetLight(0, &light);
+        device->LightEnable(0, TRUE);
+
+        // Color and alpha blending setup
+        device->SetRenderState(D3DRS_COLORVERTEX, TRUE);
+        device->SetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, D3DMCS_MATERIAL);
+        device->SetRenderState(D3DRS_AMBIENTMATERIALSOURCE, D3DMCS_MATERIAL);
 
         // Setup texture
         IMaterialVar* baseTexture = material->FindVar("$basetexture", nullptr);
         if (baseTexture && !baseTexture->IsDefined()) {
-            // Get texture handle directly from material var
             void* texHandle = baseTexture->GetTextureValue();
             if (texHandle) {
                 IDirect3DBaseTexture9* d3dtex = static_cast<IDirect3DBaseTexture9*>(texHandle);
                 if (d3dtex) {
                     device->SetTexture(0, d3dtex);
                     
-                    // Basic texture stage states
+                    // Set up texture stage states
                     device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
                     device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
                     device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
                     device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
                     device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
                     device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+
+                    // Texture addressing and filtering
+                    device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+                    device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+                    device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+                    device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+                    device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
                 }
+            } else {
+                // No texture, use fixed color
+                device->SetTexture(0, nullptr);
+                device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
+                device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+                device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
+                device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
             }
         }
+
+        // Disable unused texture stages
+        device->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        device->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
 
         // Setup alpha blending
         bool isTranslucent = material->IsTranslucent();
@@ -179,7 +199,7 @@ void FixedFunctionState::SetupFixedFunction(
         }
 
         if (shouldLog) {
-            FF_LOG("Fixed function pipeline setup complete");
+            FF_LOG("Fixed function pipeline setup complete for material: %s", material->GetName());
         }
     }
     catch (const std::exception& e) {
@@ -205,13 +225,19 @@ DWORD FixedFunctionState::GetFVFFromSourceFormat(VertexFormat_t format) {
     // Handle texture coordinates
     int texCoordCount = 0;
     for (int i = 0; i < 8; i++) {
-        unsigned int mask = FF_VERTEX_TEXCOORD0;
-        if (format & (mask << i))
+        if (format & (FF_VERTEX_TEXCOORD0 << i))
             texCoordCount++;
     }
 
     if (texCoordCount > 0)
         fvf |= (texCoordCount << D3DFVF_TEXCOUNT_SHIFT);
+
+    // Handle skinned meshes
+    if (format & FF_VERTEX_BONES) {
+        // Set up to use indexed vertex blending
+        fvf |= D3DFVF_XYZB4; // Use 4 blend indices
+        fvf |= D3DFVF_LASTBETA_UBYTE4; // Use unsigned bytes for indices
+    }
 
     return fvf;
 }
