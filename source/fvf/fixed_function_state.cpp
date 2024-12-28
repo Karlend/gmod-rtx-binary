@@ -233,6 +233,10 @@ void FixedFunctionState::Store(IDirect3DDevice9* device) {
     device->GetPixelShader(&m_state.pixelShader);
     device->GetFVF(&m_state.fvf);
 
+    FF_LOG("  Original FVF: 0x%x", m_state.fvf);
+    FF_LOG("  Vertex Shader: %p", m_state.vertexShader);
+    FF_LOG("  Pixel Shader: %p", m_state.pixelShader);
+
     // Store matrices
     device->GetTransform(D3DTS_WORLD, &m_state.world);
     device->GetTransform(D3DTS_VIEW, &m_state.view);
@@ -306,123 +310,104 @@ void FixedFunctionState::SetupFixedFunction(
     IMaterial* material,
     bool enabled)
 {
-    FF_LOG("SetupFixedFunction for %s", material->GetName());
-    FF_LOG("  Format: 0x%x", sourceFormat);
+    FF_LOG(">>> SetupFixedFunction Called <<<");
+    FF_LOG("Material: %s", material ? material->GetName() : "null");
+    FF_LOG("Material Shader: %s", material ? material->GetShaderName() : "null");
 
     try {
-        // Disable shaders first
+        // Force disable shaders
         device->SetVertexShader(nullptr);
         device->SetPixelShader(nullptr);
 
-        // Get current vertex buffer
+        // Set most basic FVF first
+        DWORD fvf = D3DFVF_XYZ | D3DFVF_DIFFUSE;
+        device->SetFVF(fvf);
+
+        // Force bright white color for testing
+        device->SetRenderState(D3DRS_LIGHTING, FALSE);
+        device->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_XRGB(255, 255, 255));
+        device->SetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, D3DMCS_COLOR1);
+        device->SetRenderState(D3DRS_AMBIENTMATERIALSOURCE, D3DMCS_COLOR1);
+
+        // Force full bright material
+        D3DMATERIAL9 mtrl;
+        ZeroMemory(&mtrl, sizeof(mtrl));
+        mtrl.Diffuse = D3DXCOLOR(1.0f, 0.0f, 0.0f, 1.0f);  // Bright red for testing
+        mtrl.Ambient = D3DXCOLOR(1.0f, 0.0f, 0.0f, 1.0f);
+        device->SetMaterial(&mtrl);
+
+        // Basic render states
+        device->SetRenderState(D3DRS_ZENABLE, TRUE);
+        device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+        device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);  // Disable culling for testing
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+
+        // Simplest possible texture stage states
+        device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+        device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+        device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+        device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
+
+        // Disable all other texture stages
+        device->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        device->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+
+        // Force no texture for testing
+        device->SetTexture(0, nullptr);
+        device->SetTexture(1, nullptr);
+
+        // Get vertex buffer info
         IDirect3DVertexBuffer9* vb = nullptr;
         UINT vbOffset = 0, stride = 0;
         device->GetStreamSource(0, &vb, &vbOffset, &stride);
 
-        if (!vb) {
-            FF_WARN("No vertex buffer bound");
-            return;
-        }
+        if (vb) {
+            D3DVERTEXBUFFER_DESC vbDesc;
+            if (SUCCEEDED(vb->GetDesc(&vbDesc))) {
+                FF_LOG("Vertex Buffer:");
+                FF_LOG("  Size: %d", vbDesc.Size);
+                FF_LOG("  FVF: 0x%x", vbDesc.FVF);
+                FF_LOG("  Stride: %d", stride);
 
-        // Calculate FVF based on source format and material type
-        DWORD fvf = D3DFVF_XYZ; // Position always present
-        const bool isModel = strstr(material->GetShaderName(), "VertexLitGeneric") != nullptr;
-        const bool isGUI = strstr(material->GetShaderName(), "UnlitGeneric") != nullptr;
-
-        // Add components based on Source format
-        if (sourceFormat & FF_VERTEX_NORMAL)
-            fvf |= D3DFVF_NORMAL;
-
-        if (sourceFormat & FF_VERTEX_COLOR)
-            fvf |= D3DFVF_DIFFUSE;
-
-        // Handle texcoords
-        int texCoords = 0;
-        if (sourceFormat & FF_VERTEX_TEXCOORD0) texCoords++;
-        if (sourceFormat & FF_VERTEX_TEXCOORD1) texCoords++;
-        if (texCoords > 0)
-            fvf |= (texCoords << D3DFVF_TEXCOUNT_SHIFT);
-
-        // Handle skinned meshes
-        if (sourceFormat & FF_VERTEX_BONES) {
-            fvf |= D3DFVF_XYZB4;    // Add room for 4 blend weights
-            fvf |= D3DFVF_LASTBETA_UBYTE4; // Specify blend indices format
-        }
-
-        FF_LOG("  Final FVF: 0x%x", fvf);
-
-        // Validate stride matches FVF
-        UINT expectedStride = 12; // XYZ
-        if (fvf & D3DFVF_NORMAL) expectedStride += 12;
-        if (fvf & D3DFVF_DIFFUSE) expectedStride += 4;
-        expectedStride += 8 * texCoords; // 8 bytes per texcoord
-        if (fvf & D3DFVF_XYZB4) expectedStride += 16; // 4 blend weights
-
-        FF_LOG("  Expected stride: %d, Actual stride: %d", expectedStride, stride);
-
-        // Create vertex buffer with proper FVF if needed
-        if (stride != expectedStride) {
-            FF_LOG("  Recreating vertex buffer with correct stride");
-            
-            D3DVERTEXBUFFER_DESC desc;
-            vb->GetDesc(&desc);
-
-            IDirect3DVertexBuffer9* newVB = nullptr;
-            HRESULT hr = device->CreateVertexBuffer(
-                desc.Size,
-                D3DUSAGE_DYNAMIC,
-                fvf,
-                D3DPOOL_DEFAULT,
-                &newVB,
-                nullptr
-            );
-
-            if (SUCCEEDED(hr)) {
-                void *srcData = nullptr, *dstData = nullptr;
-                if (SUCCEEDED(vb->Lock(0, 0, &srcData, D3DLOCK_READONLY)) &&
-                    SUCCEEDED(newVB->Lock(0, 0, &dstData, D3DLOCK_DISCARD))) 
-                {
-                    // Copy data, adjusting for stride difference
-                    UINT vertexCount = desc.Size / stride;
-                    for (UINT i = 0; i < vertexCount; i++) {
-                        memcpy(
-                            (char*)dstData + i * expectedStride,
-                            (char*)srcData + i * stride,
-                            min(stride, expectedStride)
-                        );
-                    }
-                    newVB->Unlock();
+                // Try to examine first few vertices
+                void* data;
+                if (SUCCEEDED(vb->Lock(0, sizeof(float) * 12, &data, D3DLOCK_READONLY))) {
+                    float* vertices = (float*)data;
+                    FF_LOG("First vertex position: %.2f, %.2f, %.2f", 
+                        vertices[0], vertices[1], vertices[2]);
                     vb->Unlock();
                 }
-                
-                device->SetStreamSource(0, newVB, 0, expectedStride);
-                newVB->Release();
             }
-        }
-        
-        vb->Release();
-
-        // Set render states based on material type
-        if (isModel) {
-            SetupModelStates(device, material, sourceFormat);
-        }
-        else if (isGUI) {
-            SetupGUIStates(device);
-        }
-        else {
-            SetupWorldStates(device);
+            vb->Release();
         }
 
-        // Setup textures
-        SetupTextures(device, material);
+        // Debug output current render states
+        DWORD lighting, ambient, cullMode, zEnable;
+        device->GetRenderState(D3DRS_LIGHTING, &lighting);
+        device->GetRenderState(D3DRS_AMBIENT, &ambient);
+        device->GetRenderState(D3DRS_CULLMODE, &cullMode);
+        device->GetRenderState(D3DRS_ZENABLE, &zEnable);
 
-        FF_LOG("Fixed function setup complete");
+        FF_LOG("Final Render States:");
+        FF_LOG("  Lighting: %d", lighting);
+        FF_LOG("  Ambient: 0x%x", ambient);
+        FF_LOG("  Cull Mode: %d", cullMode);
+        FF_LOG("  Z Enable: %d", zEnable);
+
+        // Verify transforms
+        D3DMATRIX worldMatrix, viewMatrix, projMatrix;
+        device->GetTransform(D3DTS_WORLD, &worldMatrix);
+        device->GetTransform(D3DTS_VIEW, &viewMatrix);
+        device->GetTransform(D3DTS_PROJECTION, &projMatrix);
+
+        FF_LOG("World Matrix [0,0]: %.2f", worldMatrix.m[0][0]);
+        FF_LOG("View Matrix [0,0]: %.2f", viewMatrix.m[0][0]);
+        FF_LOG("Proj Matrix [0,0]: %.2f", projMatrix.m[0][0]);
+
+        FF_LOG("Setup complete with debug settings");
     }
     catch (const std::exception& e) {
         FF_WARN("Exception in SetupFixedFunction: %s", e.what());
-        device->SetTexture(0, nullptr);
-        device->SetVertexShader(nullptr);
-        device->SetPixelShader(nullptr);
     }
 }
 

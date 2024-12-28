@@ -222,13 +222,22 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
     }
 
     try {
-        // Log detailed material info
-        FF_LOG("Material Details:");
-        FF_LOG("  Name: %s", material ? material->GetName() : "null");
-        FF_LOG("  Shader: %s", material ? material->GetShaderName() : "null");
-        FF_LOG("  Format: 0x%x", format);
+        FF_LOG("Pre-setup FVF check:");
+        DWORD currentFVF = 0;
+        device->GetFVF(&currentFVF);
+        FF_LOG("  Current FVF: 0x%x", currentFVF);
 
-        // Get and log current render state
+        FF_LOG("Storing current state");
+        m_stateManager->Store(device);
+
+        FF_LOG("Setting up fixed function state");
+        m_stateManager->SetupFixedFunction(device, format, material, true);
+
+        FF_LOG("Post-setup FVF check:");
+        device->GetFVF(&currentFVF);
+        FF_LOG("  Current FVF: 0x%x", currentFVF);
+
+        // Log current state
         DWORD lighting, zEnable, cullMode, fillMode;
         device->GetRenderState(D3DRS_LIGHTING, &lighting);
         device->GetRenderState(D3DRS_ZENABLE, &zEnable);
@@ -241,12 +250,11 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
         FF_LOG("  CullMode: %d", cullMode);
         FF_LOG("  FillMode: %d", fillMode);
 
-        // Get vertex/index buffers
+        // Get and validate buffers
         IDirect3DVertexBuffer9* vb = nullptr;
+        IDirect3DIndexBuffer9* ib = nullptr;
         UINT vbOffset = 0, stride = 0;
         device->GetStreamSource(0, &vb, &vbOffset, &stride);
-        
-        IDirect3DIndexBuffer9* ib = nullptr;
         device->GetIndices(&ib);
 
         if (!vb || !ib) {
@@ -256,27 +264,23 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
             return false;
         }
 
-        // Get and log buffer details
         D3DVERTEXBUFFER_DESC vbDesc;
         D3DINDEXBUFFER_DESC ibDesc;
-        
-        if (SUCCEEDED(vb->GetDesc(&vbDesc))) {
-            FF_LOG("Vertex Buffer Details:");
-            FF_LOG("  Size: %d bytes", vbDesc.Size);
-            FF_LOG("  FVF: 0x%x", vbDesc.FVF);
-            FF_LOG("  Usage: %d", vbDesc.Usage);
-            FF_LOG("  Pool: %d", vbDesc.Pool);
-        }
-        
-        if (SUCCEEDED(ib->GetDesc(&ibDesc))) {
-            FF_LOG("Index Buffer Details:");
-            FF_LOG("  Size: %d bytes", ibDesc.Size);
-            FF_LOG("  Format: %d", ibDesc.Format);
-            FF_LOG("  Usage: %d", ibDesc.Usage);
-            FF_LOG("  Pool: %d", ibDesc.Pool);
-        }
+        vb->GetDesc(&vbDesc);
+        ib->GetDesc(&ibDesc);
 
-        // Log draw call parameters
+        FF_LOG("Vertex Buffer Details:");
+        FF_LOG("  Size: %d bytes", vbDesc.Size);
+        FF_LOG("  FVF: 0x%x", vbDesc.FVF);
+        FF_LOG("  Usage: %d", vbDesc.Usage);
+        FF_LOG("  Pool: %d", vbDesc.Pool);
+
+        FF_LOG("Index Buffer Details:");
+        FF_LOG("  Size: %d bytes", ibDesc.Size);
+        FF_LOG("  Format: %d", ibDesc.Format);
+        FF_LOG("  Usage: %d", ibDesc.Usage);
+        FF_LOG("  Pool: %d", ibDesc.Pool);
+
         FF_LOG("Draw Call Parameters:");
         FF_LOG("  PrimitiveType: %d", primType);
         FF_LOG("  BaseVertexIndex: %d", baseVertexIndex);
@@ -284,26 +288,51 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
         FF_LOG("  NumVertices: %d", numVertices);
         FF_LOG("  StartIndex: %d", startIndex);
         FF_LOG("  PrimCount: %d", primCount);
-        FF_LOG("  Calculated vertex range: %d to %d", 
-            minVertexIndex, 
-            minVertexIndex + numVertices - 1);
-        FF_LOG("  Required VB size: %d bytes", numVertices * stride);
-        FF_LOG("  Required IB size: %d bytes", (startIndex + primCount * 3) * 
-            (ibDesc.Format == D3DFMT_INDEX16 ? 2 : 4));
 
-        // Release buffers
+        // Calculate ranges for validation
+        UINT vertexRange[2] = { minVertexIndex, minVertexIndex + numVertices - 1 };
+        UINT requiredVBSize = numVertices * stride;
+        UINT requiredIBSize = (startIndex + primCount * 3) * 
+            (ibDesc.Format == D3DFMT_INDEX16 ? 2 : 4);
+
+        FF_LOG("  Calculated vertex range: %d to %d", vertexRange[0], vertexRange[1]);
+        FF_LOG("  Required VB size: %d bytes", requiredVBSize);
+        FF_LOG("  Required IB size: %d bytes", requiredIBSize);
+
+        // Release buffer references before draw
         vb->Release();
         ib->Release();
 
-        FF_LOG("Skipping actual render for debugging");
+        // Actually perform the draw call now!
+        FF_LOG("Performing draw call");
+        HRESULT hr = device->DrawIndexedPrimitive(
+            primType,
+            baseVertexIndex,
+            minVertexIndex,
+            numVertices,
+            startIndex,
+            primCount
+        );
+
+        if (FAILED(hr)) {
+            FF_WARN("Draw failed with error 0x%x", hr);
+            m_stateManager->Restore(device);
+            return false;
+        }
+
+        FF_LOG("Draw call succeeded");
+
+        // Restore state
+        FF_LOG("Restoring state");
+        m_stateManager->Restore(device);
+
         return true;
     }
     catch (const std::exception& e) {
         FF_WARN("Exception in RenderWithFixedFunction: %s", e.what());
-        return false;
-    }
-    catch (...) {
-        FF_WARN("Unknown exception in RenderWithFixedFunction");
+        if (m_stateManager) {
+            m_stateManager->Restore(device);
+        }
         return false;
     }
 }
