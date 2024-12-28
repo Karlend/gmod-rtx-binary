@@ -80,6 +80,13 @@ private:
         IDirect3DDevice9* device,
         IDirect3DVertexShader9* pShader);
 
+    typedef HRESULT (__stdcall *DrawPrimitive_t)(
+        IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT);
+    static DrawPrimitive_t g_original_DrawPrimitive;
+    static HRESULT __stdcall DrawPrimitive_detour(
+        IDirect3DDevice9* device, D3DPRIMITIVETYPE PrimitiveType,
+        UINT StartVertex, UINT PrimitiveCount);
+
     // Validation helpers
     static bool ValidateVertexBuffer(IDirect3DVertexBuffer9* pVertexBuffer, UINT offsetInBytes, UINT stride);
     static bool ValidateParticleVertexBuffer(IDirect3DVertexBuffer9* pVertexBuffer, UINT stride);
@@ -99,6 +106,7 @@ private:
     Detouring::Hook m_SetVertexShaderConstantF_hook;
     Detouring::Hook m_SetStreamSource_hook;
     Detouring::Hook m_SetVertexShader_hook;
+    Detouring::Hook m_DrawPrimitive_hook;
 
     // Function pointer types
     typedef HRESULT(__stdcall* DrawIndexedPrimitive_t)(

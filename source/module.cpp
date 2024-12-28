@@ -10,6 +10,7 @@
 #include "rtx_lights/rtx_light_manager.h"
 #include "shader_fixes/shader_hooks.h"
 #include "render_modes/render_mode_manager.h"
+#include "render_modes/render_state_logger.h"
 
 #ifdef GMOD_MAIN
 extern IMaterialSystem* materials = NULL;
@@ -18,7 +19,49 @@ extern IMaterialSystem* materials = NULL;
 // extern IShaderAPI* g_pShaderAPI = NULL;
 remix::Interface* g_remix = nullptr;
 
+static ConVar rtx_world_fvf("rtx_world_fvf", "1", FCVAR_ARCHIVE, 
+    "Enable FVF for world geometry rendering");
+static ConVar rtx_model_fvf("rtx_model_fvf", "1", FCVAR_ARCHIVE, 
+    "Enable FVF for model rendering");
+
+// Add ConVar callbacks:
+void WorldFVFChanged(IConVar *var, const char *pOldValue, float flOldValue) {
+    RenderModeManager::Instance().EnableFVFForWorld(
+        static_cast<ConVar*>(var)->GetBool());
+}
+
+void ModelFVFChanged(IConVar *var, const char *pOldValue, float flOldValue) {
+    RenderModeManager::Instance().EnableFVFForModels(
+        static_cast<ConVar*>(var)->GetBool());
+}
+
 using namespace GarrysMod::Lua;
+
+LUA_FUNCTION(RTX_StartLogging) {
+    RenderStateLogger::Instance().EnableLogging(true);
+    RenderStateLogger::Instance().ClearLog();
+    Msg("[RTX] Started render state logging\n");
+    return 0;
+}
+
+LUA_FUNCTION(RTX_StopLogging) {
+    RenderStateLogger::Instance().EnableLogging(false);
+    RenderStateLogger::Instance().ForceDump();
+    Msg("[RTX] Stopped render state logging and dumped to file\n");
+    return 0;
+}
+
+LUA_FUNCTION(RTX_SetWorldFVF) {
+    bool enable = LUA->GetBool(1);
+    RenderModeManager::Instance().EnableFVFForWorld(enable);
+    return 0;
+}
+
+LUA_FUNCTION(RTX_SetModelFVF) {
+    bool enable = LUA->GetBool(1);
+    RenderModeManager::Instance().EnableFVFForModels(enable);
+    return 0;
+}
 
 LUA_FUNCTION(CreateRTXLight) {
     try {
@@ -153,6 +196,13 @@ LUA_FUNCTION(DrawRTXLights) {
     }
 }
 
+LUA_FUNCTION(RTX_SetLoggingInterval) {
+    float interval = LUA->CheckNumber(1);
+    if (interval <= 0) interval = 0.016f;  // Minimum 16ms
+    RenderStateLogger::Instance().SetLoggingInterval(interval);
+    return 0;
+}
+
 void* FindD3D9Device() {
     auto shaderapidx = GetModuleHandle("shaderapidx9.dll");
     if (!shaderapidx) {
@@ -183,18 +233,6 @@ GMOD_MODULE_OPEN() {
     try {
         Msg("[RTX Remix Fixes 2] - Module loaded!\n"); 
 
-        // // Initialize shader protection
-        // ShaderAPIHooks::Instance().Initialize();
-
-        // Initialize render mode manager
-        auto sourceDevice = static_cast<IDirect3DDevice9Ex*>(FindD3D9Device());
-        if (!sourceDevice) {
-            LUA->ThrowError("[RTX] Failed to find D3D9 device");
-            return 0;
-        }
-
-        RenderModeManager::Instance().Initialize(sourceDevice);
-
         // Find Source's D3D9 device
         auto sourceDevice = static_cast<IDirect3DDevice9Ex*>(FindD3D9Device());
         if (!sourceDevice) {
@@ -202,28 +240,63 @@ GMOD_MODULE_OPEN() {
             return 0;
         }
 
-        // Initialize Remix
-        if (auto interf = remix::lib::loadRemixDllAndInitialize(L"d3d9.dll")) {
-            g_remix = new remix::Interface{ *interf };
+        // Initialize Render Mode Manager first
+        RenderModeManager::Instance().Initialize(sourceDevice);
+        // Enable FVF for world and models by default
+        RenderModeManager::Instance().EnableFVFForWorld(true);
+        RenderModeManager::Instance().EnableFVFForModels(true);
+        Msg("[RTX] Render Mode Manager initialized\n");
+
+        // Initialize Render State Logger next
+        RenderStateLogger::Instance().Initialize(sourceDevice);
+        Msg("[RTX] Render State Logger initialized\n");
+
+        rtx_world_fvf.InstallChangeCallback(WorldFVFChanged);
+        rtx_model_fvf.InstallChangeCallback(ModelFVFChanged);
+
+        // Initialize shader protection
+        ShaderAPIHooks::Instance().Initialize();
+
+        // Try to initialize RTX, but don't fail if it doesn't work
+        bool rtxInitialized = false;
+        try {
+            if (auto interf = remix::lib::loadRemixDllAndInitialize(L"d3d9.dll")) {
+                g_remix = new remix::Interface{ *interf };
+                g_remix->dxvk_RegisterD3D9Device(sourceDevice);
+                
+                // Initialize RTX Light Manager
+                RTXLightManager::Instance().Initialize(g_remix);
+
+                // Configure RTX settings
+                g_remix->SetConfigVariable("rtx.enableAdvancedMode", "1");
+                g_remix->SetConfigVariable("rtx.fallbackLightMode", "2");
+                
+                rtxInitialized = true;
+                Msg("[RTX] RTX functionality initialized successfully\n");
+            }
         }
-        else {
-            LUA->ThrowError("[RTX Remix Fixes 2] - remix::loadRemixDllAndInitialize() failed"); 
-        }
-
-        g_remix->dxvk_RegisterD3D9Device(sourceDevice);
-
-        // Initialize RTX Light Manager
-        RTXLightManager::Instance().Initialize(g_remix);
-
-        // Configure RTX settings
-        if (g_remix) {
-            g_remix->SetConfigVariable("rtx.enableAdvancedMode", "1");
-            g_remix->SetConfigVariable("rtx.fallbackLightMode", "2");
-            Msg("[RTX Remix Fixes] RTX configuration set\n");
+        catch (...) {
+            Warning("[RTX] Failed to initialize RTX functionality - continuing without RTX support\n");
         }
 
         // Register Lua functions
         LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB); 
+
+        // Create RTX table
+        LUA->CreateTable();
+        {
+            LUA->PushString("1.0.0");
+            LUA->SetField(-2, "Version");
+
+            LUA->PushBool(rtxInitialized);
+            LUA->SetField(-2, "RTXEnabled");
+
+            LUA->PushBool(true);
+            LUA->SetField(-2, "Loaded");
+        }
+
+        // Only register RTX functions if initialized
+        if (rtxInitialized) {
             LUA->PushCFunction(CreateRTXLight);
             LUA->SetField(-2, "CreateRTXLight");
             
@@ -235,29 +308,38 @@ GMOD_MODULE_OPEN() {
             
             LUA->PushCFunction(DrawRTXLights);
             LUA->SetField(-2, "DrawRTXLights");
+        }
 
-            LUA->PushCFunction(SetSelectiveRendering);
-            LUA->SetField(-2, "SetSelectiveRendering");     
+        // Always register logging functions
+        LUA->PushCFunction(RTX_SetLoggingInterval);
+        LUA->SetField(-2, "SetLoggingInterval");
 
-            LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
-                
-            LUA->PushCFunction([](GarrysMod::Lua::ILuaBase* LUA) -> int {
-                RenderModeManager::Instance().EnableFVFForWorld(LUA->GetBool(1));
-                return 0;
-            });
-            LUA->SetField(-2, "EnableWorldFVF");
-                
-            LUA->PushCFunction([](GarrysMod::Lua::ILuaBase* LUA) -> int {
-                RenderModeManager::Instance().EnableFVFForModels(LUA->GetBool(1));
-                return 0;
-            });
-            LUA->SetField(-2, "EnableModelsFVF");
+        LUA->PushCFunction(RTX_StartLogging);
+        LUA->SetField(-2, "StartLogging");
+
+        LUA->PushCFunction(RTX_StopLogging);
+        LUA->SetField(-2, "StopLogging");
+
+        LUA->PushCFunction(RTX_SetWorldFVF);
+        LUA->SetField(-2, "SetWorldFVF");
+        
+        LUA->PushCFunction(RTX_SetModelFVF);
+        LUA->SetField(-2, "SetModelFVF");
+
+        // Set the RTX table
+        LUA->SetField(-2, "RTX");
+
         LUA->Pop();
 
+        Msg("[RTX] Successfully registered Lua interface\n");
+        return 0;
+    }
+    catch (const std::exception& e) {
+        Error("[RTX] Exception in module initialization: %s\n", e.what());
         return 0;
     }
     catch (...) {
-        Error("[RTX] Exception in module initialization\n");
+        Error("[RTX] Unknown exception in module initialization\n");
         return 0;
     }
 }
@@ -266,7 +348,13 @@ GMOD_MODULE_CLOSE() {
     try {
         Msg("[RTX] Shutting down module...\n");
 
-                // Shutdown shader protection
+        // Shutdown RenderModeManager first
+        RenderModeManager::Instance().Shutdown();
+        
+        // Then shutdown logger
+        RenderStateLogger::Instance().Shutdown();
+        
+        // Shutdown shader protection
         ShaderAPIHooks::Instance().Shutdown();
         
         RTXLightManager::Instance().Shutdown();

@@ -1,6 +1,7 @@
 #include "shader_hooks.h"
 #include <algorithm>
 #include <psapi.h>
+#include "render_modes/render_state_logger.h"
 #pragma comment(lib, "psapi.lib")
 
 // Define the global variables here
@@ -21,6 +22,9 @@ ShaderAPIHooks::DivisionFunction_t ShaderAPIHooks::g_original_DivisionFunction =
 ShaderAPIHooks::VertexBufferLock_t ShaderAPIHooks::g_original_VertexBufferLock = nullptr;
 std::unordered_set<uintptr_t> ShaderAPIHooks::s_problematicAddresses;
 ShaderAPIHooks::ParticleRender_t ShaderAPIHooks::g_original_ParticleRender = nullptr;
+ShaderAPIHooks::DrawPrimitive_t ShaderAPIHooks::g_original_DrawPrimitive = nullptr;
+
+
 
 namespace {
     bool IsValidPointer(const void* ptr, size_t size) {
@@ -173,13 +177,6 @@ void ShaderAPIHooks::Initialize() {
 
         // Hook D3D9 functions
         try {
-            // DrawIndexedPrimitive (index 82)
-            Detouring::Hook::Target target_draw(&vftable[82]);
-            m_DrawIndexedPrimitive_hook.Create(target_draw, DrawIndexedPrimitive_detour);
-            g_original_DrawIndexedPrimitive = m_DrawIndexedPrimitive_hook.GetTrampoline<DrawIndexedPrimitive_t>();
-            m_DrawIndexedPrimitive_hook.Enable();
-            Msg("[Shader Fixes] Hooked DrawIndexedPrimitive\n");
-
             // SetStreamSource (index 100)
             Detouring::Hook::Target target_stream(&vftable[100]);
             m_SetStreamSource_hook.Create(target_stream, SetStreamSource_detour);
@@ -200,6 +197,20 @@ void ShaderAPIHooks::Initialize() {
             g_original_SetVertexShaderConstantF = m_SetVertexShaderConstantF_hook.GetTrampoline<SetVertexShaderConstantF_t>();
             m_SetVertexShaderConstantF_hook.Enable();
             Msg("[Shader Fixes] Hooked SetVertexShaderConstantF\n");
+
+            // DrawPrimitive (index 81)
+            Detouring::Hook::Target target_draw_prim(&vftable[81]);
+            m_DrawPrimitive_hook.Create(target_draw_prim, DrawPrimitive_detour);
+            g_original_DrawPrimitive = m_DrawPrimitive_hook.GetTrampoline<DrawPrimitive_t>();
+            m_DrawPrimitive_hook.Enable();
+            Msg("[Shader Fixes] Hooked DrawPrimitive\n");
+
+            // DrawIndexedPrimitive (index 82)
+            Detouring::Hook::Target target_draw(&vftable[82]);
+            m_DrawIndexedPrimitive_hook.Create(target_draw, DrawIndexedPrimitive_detour);
+            g_original_DrawIndexedPrimitive = m_DrawIndexedPrimitive_hook.GetTrampoline<DrawIndexedPrimitive_t>();
+            m_DrawIndexedPrimitive_hook.Enable();
+            Msg("[Shader Fixes] Hooked DrawIndexedPrimitive\n");
         }
         catch (...) {
             Error("[Shader Fixes] Failed to hook one or more D3D9 functions\n");
@@ -407,6 +418,7 @@ void ShaderAPIHooks::Shutdown() {
     m_SetStreamSource_hook.Disable();
     m_SetVertexShader_hook.Disable();
     s_ConMsg_hook.Disable();
+    m_DrawPrimitive_hook.Disable();
 
     // Log shutdown completion
     Msg("[Shader Fixes] Shutdown complete\n");
@@ -453,8 +465,29 @@ HRESULT __stdcall ShaderAPIHooks::DrawIndexedPrimitive_detour(
     UINT NumVertices,
     UINT StartIndex,
     UINT PrimitiveCount) {
-    
+
     __try {
+        static float lastDebugTime = 0.0f;
+        float currentTime = GetTickCount64() / 1000.0f;
+
+        // Debug output every second
+        if (currentTime - lastDebugTime > 1.0f) {
+            Msg("[Shader Hooks] Draw call detected - Primitives: %d, Vertices: %d\n", 
+                PrimitiveCount, NumVertices);
+            lastDebugTime = currentTime;
+        }
+
+        // Log the draw call
+        RenderStateLogger::Instance().LogIndexedDrawCall(
+            device, 
+            PrimitiveType, 
+            BaseVertexIndex, 
+            MinVertexIndex,
+            NumVertices, 
+            StartIndex, 
+            PrimitiveCount,
+            "DrawIndexedPrimitive");
+    
         if (s_state.isProcessingParticle || IsParticleSystem()) {
             if (!ValidatePrimitiveParams(MinVertexIndex, NumVertices, PrimitiveCount)) {
                 Warning("[Shader Fixes] Blocked invalid draw call for %s\n", 
@@ -470,6 +503,36 @@ HRESULT __stdcall ShaderAPIHooks::DrawIndexedPrimitive_detour(
     __except(EXCEPTION_EXECUTE_HANDLER) {
         Warning("[Shader Fixes] Exception in DrawIndexedPrimitive for %s\n", 
             s_state.lastMaterialName.c_str());
+        return D3D_OK;
+    }
+}
+
+HRESULT __stdcall ShaderAPIHooks::DrawPrimitive_detour(
+    IDirect3DDevice9* device,
+    D3DPRIMITIVETYPE PrimitiveType,
+    UINT StartVertex,
+    UINT PrimitiveCount) {
+    
+    __try {
+        static float lastDebugTime = 0.0f;
+        float currentTime = GetTickCount64() / 1000.0f;
+
+        if (currentTime - lastDebugTime > 1.0f) {
+            Msg("[Shader Hooks] Regular draw call - Primitives: %d\n", PrimitiveCount);
+            lastDebugTime = currentTime;
+        }
+
+        RenderStateLogger::Instance().LogDrawCall(
+            device,
+            PrimitiveType,
+            StartVertex,
+            PrimitiveCount,
+            "DrawPrimitive");
+
+        return g_original_DrawPrimitive(device, PrimitiveType, StartVertex, PrimitiveCount);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        Warning("[Shader Fixes] Exception in DrawPrimitive\n");
         return D3D_OK;
     }
 }
