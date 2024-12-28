@@ -6,6 +6,7 @@
 #include "materialsystem/imaterialsystem.h"
 #include "materialsystem/imaterial.h"
 #include "mathlib/mathlib.h"
+#include "detouring/hook.hpp"
 
 class RenderModeManager {
 public:
@@ -59,6 +60,7 @@ private:
     };
     std::unordered_map<DWORD, FVFFormat> m_fvfCache;
     std::unordered_map<IDirect3DVertexBuffer9*, VertexBufferInfo> m_vertexBufferCache;
+    
 
     // Helper functions
     bool IsWorldDrawing() const;
@@ -72,4 +74,5 @@ private:
     friend HRESULT WINAPI SetVertexDeclaration_Detour(IDirect3DDevice9* device, IDirect3DVertexDeclaration9* decl);
     friend HRESULT WINAPI SetStreamSource_Detour(IDirect3DDevice9* device, UINT StreamNumber, 
         IDirect3DVertexBuffer9* pStreamData, UINT OffsetInBytes, UINT Stride);
+    std::vector<Detouring::Hook*> m_hooks;
 };

@@ -127,7 +127,20 @@ void RenderStateLogger::DumpLogToFile() {
 void RenderStateLogger::LogDrawCall(IDirect3DDevice9* device, D3DPRIMITIVETYPE primType,
     UINT startVertex, UINT primCount, const char* context) {
     
-    if (!ShouldLog()) return;
+    static float s_lastDebugTime = 0.0f;
+    float currentTime = GetTickCount64() / 1000.0f;
+
+    Msg("[Render Logger] LogDrawCall called - Initialized: %d, Enabled: %d, Device: %p\n",
+        m_initialized, m_loggingEnabled, m_device);
+
+    if (!ShouldLog()) {
+        if (currentTime - s_lastDebugTime > 1.0f) {
+            Msg("[Render Logger] Skipping log - Time since last: %f, Interval: %f\n",
+                currentTime - m_lastLogTime, m_logInterval);
+            s_lastDebugTime = currentTime;
+        }
+        return;
+    }
 
     std::lock_guard<std::mutex> lock(m_mutex);
     
@@ -348,12 +361,21 @@ std::string RenderStateLogger::FormatDrawCallInfo(const DrawCallInfo& info) {
 }
 
 bool RenderStateLogger::ShouldLog() {
-    if (!m_initialized || !m_loggingEnabled || !m_device)
+    if (!m_initialized || !m_loggingEnabled || !m_device) {
+        static float s_lastErrorTime = 0.0f;
+        float currentTime = GetTickCount64() / 1000.0f;
+        if (currentTime - s_lastErrorTime > 1.0f) {
+            Msg("[Render Logger] Cannot log - Initialized: %d, Enabled: %d, Device: %p\n",
+                m_initialized, m_loggingEnabled, m_device);
+            s_lastErrorTime = currentTime;
+        }
         return false;
+    }
 
     float currentTime = GetTickCount64() / 1000.0f;
-    if (currentTime - m_lastLogTime < m_logInterval)
+    if (currentTime - m_lastLogTime < m_logInterval) {
         return false;
+    }
 
     m_lastLogTime = currentTime;
     return true;

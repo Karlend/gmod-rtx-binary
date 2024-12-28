@@ -5,13 +5,20 @@
 extern IMaterialSystem* materials;
 
 HRESULT WINAPI SetFVF_Detour(IDirect3DDevice9* device, DWORD FVF) {
+    static float s_lastDebugTime = 0.0f;
+    float currentTime = GetTickCount64() / 1000.0f;
+
+    if (currentTime - s_lastDebugTime > 1.0f) {
+        Msg("[RTX FVF] SetFVF called with FVF: 0x%x\n", FVF);
+        s_lastDebugTime = currentTime;
+    }
+
     auto& manager = RenderModeManager::Instance();
     
     if (manager.ShouldUseFVF()) {
         Msg("[RTX FVF] Using FVF mode: 0x%x\n", FVF);
         return manager.m_originalSetFVF(device, FVF);
     } else {
-        Msg("[RTX FVF] Converting FVF to declaration: 0x%x\n", FVF);
         auto decl = manager.CreateFVFDeclaration(FVF);
         if (decl) {
             return manager.m_originalSetVertexDeclaration(device, decl);
@@ -162,33 +169,63 @@ void RenderModeManager::Initialize(IDirect3DDevice9* device) {
         }
 
         m_device = device;
+        Msg("[RTX FVF] Initializing with device: %p\n", device);
 
         // Get D3D9 vtable
         void** vTable = *reinterpret_cast<void***>(device);
+        Msg("[RTX FVF] Device vtable: %p\n", vTable);
         
-        // Hook SetFVF (index 89)
-        Detouring::Hook::Target fvfTarget(&vTable[89]);
-        auto setFVFHook = new Detouring::Hook();
-        setFVFHook->Create(fvfTarget, &SetFVF_Detour);
-        m_originalSetFVF = setFVFHook->GetTrampoline<SetFVF_t>();
-        
-        // Hook SetVertexDeclaration (index 87)
-        Detouring::Hook::Target declTarget(&vTable[87]);
-        auto setDeclHook = new Detouring::Hook();
-        setDeclHook->Create(declTarget, &SetVertexDeclaration_Detour);
-        m_originalSetVertexDeclaration = setDeclHook->GetTrampoline<SetVertexDeclaration_t>();
+        try {
+            // Hook SetFVF (index 89)
+            Msg("[RTX FVF] Setting up SetFVF hook at index 89: %p\n", vTable[89]);
+            auto setFVFHook = new Detouring::Hook();
+            Detouring::Hook::Target fvfTarget(&vTable[89]);
+            setFVFHook->Create(fvfTarget, SetFVF_Detour);
+            m_originalSetFVF = setFVFHook->GetTrampoline<SetFVF_t>();
+            setFVFHook->Enable();
+            m_hooks.push_back(setFVFHook);
+            
+            // Hook SetVertexDeclaration (index 87)
+            Msg("[RTX FVF] Setting up SetVertexDeclaration hook at index 87: %p\n", vTable[87]);
+            auto setDeclHook = new Detouring::Hook();
+            Detouring::Hook::Target declTarget(&vTable[87]);
+            setDeclHook->Create(declTarget, SetVertexDeclaration_Detour);
+            m_originalSetVertexDeclaration = setDeclHook->GetTrampoline<SetVertexDeclaration_t>();
+            setDeclHook->Enable();
+            m_hooks.push_back(setDeclHook);
 
-        // Hook SetStreamSource (index 100)
-        Detouring::Hook::Target streamTarget(&vTable[100]);
-        auto setStreamHook = new Detouring::Hook();
-        setStreamHook->Create(streamTarget, &SetStreamSource_Detour);
-        m_originalSetStreamSource = setStreamHook->GetTrampoline<SetStreamSource_t>();
+            // Hook SetStreamSource (index 100)
+            Msg("[RTX FVF] Setting up SetStreamSource hook at index 100: %p\n", vTable[100]);
+            auto setStreamHook = new Detouring::Hook();
+            Detouring::Hook::Target streamTarget(&vTable[100]);
+            setStreamHook->Create(streamTarget, SetStreamSource_Detour);
+            m_originalSetStreamSource = setStreamHook->GetTrampoline<SetStreamSource_t>();
+            setStreamHook->Enable();
+            m_hooks.push_back(setStreamHook);
+        }
+        catch (const std::exception& e) {
+            LogMessage("Exception while creating hooks: %s\n", e.what());
+            throw;
+        }
 
         m_initialized = true;
-        LogMessage("Render mode manager initialized\n");
+        LogMessage("Render mode manager initialized successfully\n");
+    }
+    catch (const std::exception& e) {
+        LogMessage("Exception during initialization: %s\n", e.what());
+        // Cleanup any hooks that were created
+        for (auto hook : m_hooks) {
+            delete hook;
+        }
+        m_hooks.clear();
     }
     catch (...) {
-        LogMessage("Exception during initialization\n");
+        LogMessage("Unknown exception during initialization\n");
+        // Cleanup any hooks that were created
+        for (auto hook : m_hooks) {
+            delete hook;
+        }
+        m_hooks.clear();
     }
     
     LeaveCriticalSection(&m_cs);
@@ -200,6 +237,15 @@ void RenderModeManager::Shutdown() {
     // Restore default state before shutting down
     RestoreState();
     
+    // Cleanup hooks
+    for (auto* hook : m_hooks) {
+        if (hook) {
+            hook->Disable();
+            delete hook;
+        }
+    }
+    m_hooks.clear();
+    
     ClearFVFCache();
     ClearVertexBufferCache();
     
@@ -210,6 +256,8 @@ void RenderModeManager::Shutdown() {
     
     m_initialized = false;
     m_device = nullptr;
+    
+    LogMessage("Shutdown complete\n");
     
     LeaveCriticalSection(&m_cs);
 }
