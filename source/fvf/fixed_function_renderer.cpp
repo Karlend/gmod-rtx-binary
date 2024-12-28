@@ -4,6 +4,11 @@
 #include "material_util.h"
 #include <tier0/dbg.h>
 #include "ff_logging.h"
+#include "interface.h"
+#include "filesystem.h"
+#include "materialsystem/imaterialsystem.h"
+
+static IMaterialSystem* g_pMaterialSystem = nullptr;
 
 FixedFunctionRenderer::DrawIndexedPrimitive_t FixedFunctionRenderer::s_originalDrawIndexedPrimitive = nullptr;
 Detouring::Hook FixedFunctionRenderer::s_drawHook;
@@ -34,6 +39,20 @@ void FixedFunctionRenderer::Initialize(IDirect3DDevice9* device) {
     if (!device) {
         FF_WARN("Null device in Initialize");
         return;
+    }
+
+    // Get MaterialSystem interface
+    CreateInterfaceFn factory = Sys_GetFactory("materialsystem.dll");
+    if (factory) {
+        g_pMaterialSystem = (IMaterialSystem*)factory(MATERIAL_SYSTEM_INTERFACE_VERSION, NULL);
+        if (g_pMaterialSystem) {
+            FF_LOG("MaterialSystem interface acquired");
+            materials = g_pMaterialSystem; // Set the global materials pointer
+        } else {
+            FF_WARN("Failed to get MaterialSystem interface");
+        }
+    } else {
+        FF_WARN("Failed to get materialsystem.dll factory");
     }
 
     FF_LOG("Initializing with device: %p", device);
@@ -206,15 +225,24 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     UINT StartIndex,
     UINT PrimitiveCount)
 {
+    auto& instance = Instance();
+    
+    // Ensure materials interface is available
+    if (!materials || !g_pMaterialSystem) {
+        FF_LOG("MaterialSystem not available, using original path");
+        return s_originalDrawIndexedPrimitive(
+            device, PrimitiveType, BaseVertexIndex,
+            MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
+    }
+
     static bool first_call = true;
     if (first_call) {
         FF_LOG("First draw call intercepted!");
         FF_LOG("Device: %p", device);
-        FF_LOG("Original function: %p", s_originalDrawIndexedPrimitive);
+        FF_LOG("MaterialSystem: %p", materials);
         first_call = false;
     }
 
-    auto& instance = Instance();
     if (!s_originalDrawIndexedPrimitive) {
         FF_WARN("No original function available!");
         return D3D_OK;

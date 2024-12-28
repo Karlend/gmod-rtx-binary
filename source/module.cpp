@@ -241,6 +241,22 @@ GMOD_MODULE_OPEN() {
     try {
         Msg("[RTX FVF] Starting module initialization...\n");
 
+        // Initialize MaterialSystem interface
+        CreateInterfaceFn factory = Sys_GetFactory("materialsystem.dll");
+        if (!factory) {
+            Error("[RTX FVF] Failed to get materialsystem.dll factory\n");
+            return 1;
+        }
+
+        IMaterialSystem* materialSystem = (IMaterialSystem*)factory(MATERIAL_SYSTEM_INTERFACE_VERSION, NULL);
+        if (!materialSystem) {
+            Error("[RTX FVF] Failed to get MaterialSystem interface\n");
+            return 1;
+        }
+
+        materials = materialSystem;
+        Msg("[RTX FVF] MaterialSystem interface acquired\n");
+
         // Find D3D device
         auto sourceDevice = static_cast<IDirect3DDevice9Ex*>(FindD3D9Device());
         if (!sourceDevice) {
