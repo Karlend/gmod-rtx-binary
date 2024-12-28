@@ -76,4 +76,9 @@ private:
     void StoreTextureStage(IDirect3DDevice9* device, DWORD stage);
     void RestoreTextureStage(IDirect3DDevice9* device, DWORD stage, const TextureStageState& state);
     bool FindAndSetTexture(IDirect3DDevice9* device, IMaterial* material);
+    void SetupModelStates(IDirect3DDevice9* device, IMaterial* material, VertexFormat_t format);
+    void SetupGUIStates(IDirect3DDevice9* device);
+    void SetupWorldStates(IDirect3DDevice9* device);
+    void SetupBoneMatrices(IDirect3DDevice9* device, IMaterial* material);
+    void SetupTextures(IDirect3DDevice9* device, IMaterial* material);
 };

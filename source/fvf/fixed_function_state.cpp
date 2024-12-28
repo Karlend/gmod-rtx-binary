@@ -14,6 +14,109 @@ FixedFunctionState::~FixedFunctionState() {
     if (m_state.pixelShader) m_state.pixelShader->Release();
 }
 
+void FixedFunctionState::SetupModelStates(IDirect3DDevice9* device, IMaterial* material, VertexFormat_t format)
+{
+    device->SetRenderState(D3DRS_LIGHTING, TRUE);
+    device->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_ARGB(255, 128, 128, 128));
+    device->SetRenderState(D3DRS_COLORVERTEX, TRUE);
+    device->SetRenderState(D3DRS_SPECULARENABLE, TRUE);
+    device->SetRenderState(D3DRS_NORMALIZENORMALS, TRUE);
+
+    if (format & FF_VERTEX_BONES) {
+        device->SetRenderState(D3DRS_VERTEXBLEND, D3DVBF_3WEIGHTS);
+        device->SetRenderState(D3DRS_INDEXEDVERTEXBLENDENABLE, TRUE);
+        SetupBoneMatrices(device, material);
+    }
+
+    D3DMATERIAL9 mtrl = {};
+    mtrl.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
+    mtrl.Ambient = D3DXCOLOR(0.5f, 0.5f, 0.5f, 1.0f);
+    mtrl.Specular = D3DXCOLOR(0.2f, 0.2f, 0.2f, 1.0f);
+    mtrl.Power = 8.0f;
+    device->SetMaterial(&mtrl);
+}
+
+void FixedFunctionState::SetupGUIStates(IDirect3DDevice9* device)
+{
+    device->SetRenderState(D3DRS_LIGHTING, FALSE);
+    device->SetRenderState(D3DRS_ZENABLE, FALSE);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+}
+
+void FixedFunctionState::SetupWorldStates(IDirect3DDevice9* device)
+{
+    device->SetRenderState(D3DRS_LIGHTING, TRUE);
+    device->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_ARGB(255, 128, 128, 128));
+    device->SetRenderState(D3DRS_ZENABLE, TRUE);
+    device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+    device->SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW);
+}
+
+void FixedFunctionState::SetupBoneMatrices(IDirect3DDevice9* device, IMaterial* material)
+{
+    IMaterialVar* boneVar = material->FindVar("$numbones", nullptr);
+    int numBones = boneVar ? boneVar->GetIntValue() : 0;
+    FF_LOG("  Setting up %d bone matrices", numBones);
+
+    for (int i = 0; i < numBones && i < 96; i++) {
+        D3DMATRIX boneMatrix = {
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1
+        };
+        device->SetTransform(D3DTS_WORLDMATRIX(i), &boneMatrix);
+    }
+}
+
+void FixedFunctionState::SetupTextures(IDirect3DDevice9* device, IMaterial* material)
+{
+    IMaterialVar* baseTexture = material->FindVar("$basetexture", nullptr);
+    if (!baseTexture || !baseTexture->IsDefined()) {
+        FF_LOG("No base texture for material %s", material->GetName());
+        device->SetTexture(0, nullptr);
+        device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
+        device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+        return;
+    }
+
+    void* texHandle = nullptr;
+    try {
+        texHandle = baseTexture->GetTextureValue();
+    }
+    catch (...) {
+        FF_WARN("Failed to get texture for material %s", material->GetName());
+        return;
+    }
+
+    if (texHandle) {
+        IDirect3DBaseTexture9* d3dtex = static_cast<IDirect3DBaseTexture9*>(texHandle);
+        device->SetTexture(0, d3dtex);
+        
+        // Set up texture stage states
+        device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+        device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+        device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+        device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+        device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+
+        // Set up sampling states
+        device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+        device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+        device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+        device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+        device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+    }
+
+    // Disable unused texture stages
+    device->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+    device->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+}
+
 bool FixedFunctionState::FindAndSetTexture(IDirect3DDevice9* device, IMaterial* material) {
     if (!device || !material) {
         FF_WARN("Invalid device or material in FindAndSetTexture");
@@ -203,221 +306,120 @@ void FixedFunctionState::SetupFixedFunction(
     IMaterial* material,
     bool enabled)
 {
-    static float lastLogTime = 0.0f;
-    float currentTime = Plat_FloatTime();
-    bool shouldLog = (currentTime - lastLogTime > 1.0f);
-    
-    if (shouldLog) {
-        FF_LOG(">>> SetupFixedFunction Called <<<");
-        FF_LOG("Material: %s", material ? material->GetName() : "null");
-        lastLogTime = currentTime;
-    }
-
-    if (!device || !material) {
-        FF_WARN("Invalid device or material");
-        return;
-    }
-
-    bool isModel = (strstr(material->GetName(), "models/") != nullptr) ||
-                  (strstr(material->GetShaderName(), "VertexLitGeneric") != nullptr);
-
     FF_LOG("SetupFixedFunction for %s", material->GetName());
     FF_LOG("  Format: 0x%x", sourceFormat);
-    FF_LOG("  Is Model: %s", isModel ? "Yes" : "No");
-
 
     try {
-        // Disable shaders
+        // Disable shaders first
         device->SetVertexShader(nullptr);
         device->SetPixelShader(nullptr);
 
-        // Setup vertex format
-        DWORD fvf = GetFVFFromSourceFormat(sourceFormat);
-        device->SetFVF(fvf);
-    
-        // For models, set up specific states
-        if (isModel) {
-            // Enable vertex blend for skinned meshes
-            if (sourceFormat & FF_VERTEX_BONES) {
-                FF_LOG("  Setting up skinned mesh states");
-                device->SetRenderState(D3DRS_VERTEXBLEND, D3DVBF_3WEIGHTS);
-                device->SetRenderState(D3DRS_INDEXEDVERTEXBLENDENABLE, TRUE);
+        // Get current vertex buffer
+        IDirect3DVertexBuffer9* vb = nullptr;
+        UINT vbOffset = 0, stride = 0;
+        device->GetStreamSource(0, &vb, &vbOffset, &stride);
 
-                // Set up bone matrices
-                IMaterialVar* boneVar = material->FindVar("$numbones", nullptr);
-                int numBones = boneVar ? boneVar->GetIntValue() : 0;
-                FF_LOG("  Bone Count: %d", numBones);
+        if (!vb) {
+            FF_WARN("No vertex buffer bound");
+            return;
+        }
 
-                for (int i = 0; i < numBones && i < 96; i++) {
-                    D3DMATRIX boneMatrix = {
-                        1, 0, 0, 0,
-                        0, 1, 0, 0,
-                        0, 0, 1, 0,
-                        0, 0, 0, 1
-                    };
-                    device->SetTransform(D3DTS_WORLDMATRIX(i), &boneMatrix);
+        // Calculate FVF based on source format and material type
+        DWORD fvf = D3DFVF_XYZ; // Position always present
+        const bool isModel = strstr(material->GetShaderName(), "VertexLitGeneric") != nullptr;
+        const bool isGUI = strstr(material->GetShaderName(), "UnlitGeneric") != nullptr;
+
+        // Add components based on Source format
+        if (sourceFormat & FF_VERTEX_NORMAL)
+            fvf |= D3DFVF_NORMAL;
+
+        if (sourceFormat & FF_VERTEX_COLOR)
+            fvf |= D3DFVF_DIFFUSE;
+
+        // Handle texcoords
+        int texCoords = 0;
+        if (sourceFormat & FF_VERTEX_TEXCOORD0) texCoords++;
+        if (sourceFormat & FF_VERTEX_TEXCOORD1) texCoords++;
+        if (texCoords > 0)
+            fvf |= (texCoords << D3DFVF_TEXCOUNT_SHIFT);
+
+        // Handle skinned meshes
+        if (sourceFormat & FF_VERTEX_BONES) {
+            fvf |= D3DFVF_XYZB4;    // Add room for 4 blend weights
+            fvf |= D3DFVF_LASTBETA_UBYTE4; // Specify blend indices format
+        }
+
+        FF_LOG("  Final FVF: 0x%x", fvf);
+
+        // Validate stride matches FVF
+        UINT expectedStride = 12; // XYZ
+        if (fvf & D3DFVF_NORMAL) expectedStride += 12;
+        if (fvf & D3DFVF_DIFFUSE) expectedStride += 4;
+        expectedStride += 8 * texCoords; // 8 bytes per texcoord
+        if (fvf & D3DFVF_XYZB4) expectedStride += 16; // 4 blend weights
+
+        FF_LOG("  Expected stride: %d, Actual stride: %d", expectedStride, stride);
+
+        // Create vertex buffer with proper FVF if needed
+        if (stride != expectedStride) {
+            FF_LOG("  Recreating vertex buffer with correct stride");
+            
+            D3DVERTEXBUFFER_DESC desc;
+            vb->GetDesc(&desc);
+
+            IDirect3DVertexBuffer9* newVB = nullptr;
+            HRESULT hr = device->CreateVertexBuffer(
+                desc.Size,
+                D3DUSAGE_DYNAMIC,
+                fvf,
+                D3DPOOL_DEFAULT,
+                &newVB,
+                nullptr
+            );
+
+            if (SUCCEEDED(hr)) {
+                void *srcData = nullptr, *dstData = nullptr;
+                if (SUCCEEDED(vb->Lock(0, 0, &srcData, D3DLOCK_READONLY)) &&
+                    SUCCEEDED(newVB->Lock(0, 0, &dstData, D3DLOCK_DISCARD))) 
+                {
+                    // Copy data, adjusting for stride difference
+                    UINT vertexCount = desc.Size / stride;
+                    for (UINT i = 0; i < vertexCount; i++) {
+                        memcpy(
+                            (char*)dstData + i * expectedStride,
+                            (char*)srcData + i * stride,
+                            min(stride, expectedStride)
+                        );
+                    }
+                    newVB->Unlock();
+                    vb->Unlock();
                 }
+                
+                device->SetStreamSource(0, newVB, 0, expectedStride);
+                newVB->Release();
             }
-
-            // Enhanced model lighting
-            FF_LOG("  Setting up model lighting");
-            device->SetRenderState(D3DRS_LIGHTING, TRUE);
-            device->SetRenderState(D3DRS_SPECULARENABLE, TRUE);
-            device->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_ARGB(255, 128, 128, 128));
-            device->SetRenderState(D3DRS_NORMALIZENORMALS, TRUE);
-
-            // Set up model material
-            D3DMATERIAL9 mtrl;
-            ZeroMemory(&mtrl, sizeof(mtrl));
-            mtrl.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
-            mtrl.Ambient = D3DXCOLOR(0.5f, 0.5f, 0.5f, 1.0f);
-            mtrl.Specular = D3DXCOLOR(0.2f, 0.2f, 0.2f, 1.0f);
-            mtrl.Power = 8.0f;
-            device->SetMaterial(&mtrl);
-
-            // Set up model lighting
-            D3DLIGHT9 light;
-            ZeroMemory(&light, sizeof(light));
-            light.Type = D3DLIGHT_DIRECTIONAL;
-            light.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
-            light.Ambient = D3DXCOLOR(0.3f, 0.3f, 0.3f, 1.0f);
-            light.Direction = D3DXVECTOR3(0.0f, -1.0f, -1.0f);
-            device->SetLight(0, &light);
-            device->LightEnable(0, TRUE);
-        }
-
-        // Setup transforms
-        SetupTransforms(device, material);
-
-        // Basic render states
-        device->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
-        device->SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW);
-        device->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
-        device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
-        device->SetRenderState(D3DRS_LIGHTING, TRUE);
-        device->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
-        device->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_ARGB(255, 128, 128, 128));
-
-        // Set up basic material properties
-        D3DMATERIAL9 mtrl;
-        ZeroMemory(&mtrl, sizeof(mtrl));
-        mtrl.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
-        mtrl.Ambient = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
-        device->SetMaterial(&mtrl);
-
-        // Setup basic light
-        device->SetRenderState(D3DRS_LIGHTING, TRUE);
-        D3DLIGHT9 light;
-        ZeroMemory(&light, sizeof(light));
-        light.Type = D3DLIGHT_DIRECTIONAL;
-        light.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
-        light.Direction = D3DXVECTOR3(0.0f, 0.0f, -1.0f);
-        device->SetLight(0, &light);
-        device->LightEnable(0, TRUE);
-
-        // Color and alpha blending setup
-        device->SetRenderState(D3DRS_COLORVERTEX, TRUE);
-        device->SetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, D3DMCS_MATERIAL);
-        device->SetRenderState(D3DRS_AMBIENTMATERIALSOURCE, D3DMCS_MATERIAL);
-
-        // Setup texture
-        IMaterialVar* baseTexture = material->FindVar("$basetexture", nullptr);
-        if (baseTexture && !baseTexture->IsDefined()) {
-            bool hasValidTexture = false;
-            void* texHandle = nullptr;
-
-            try {
-                texHandle = baseTexture->GetTextureValue();
-                hasValidTexture = (texHandle != nullptr);
-            }
-            catch (...) {
-                FF_WARN("Exception getting texture for material: %s", material->GetName());
-                hasValidTexture = false;
-            }
-
-            if (hasValidTexture) {
-                IDirect3DBaseTexture9* d3dtex = static_cast<IDirect3DBaseTexture9*>(texHandle);
-                if (d3dtex) {
-                    device->SetTexture(0, d3dtex);
-                    
-                    // Set up texture stage states
-                    device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
-                    device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-                    device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-                    device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
-                    device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
-                    device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
-
-                    // Texture addressing and filtering
-                    device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-                    device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
-                    device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-                    device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-                    device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-                }
-            } else {
-                // Handle materials without valid textures
-                FF_LOG("No valid texture for material: %s, using fallback color", material->GetName());
-                device->SetTexture(0, nullptr);
-                device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
-                device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-                device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
-                device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
-
-                // Set white color for untextured materials
-                D3DMATERIAL9 mtrl;
-                ZeroMemory(&mtrl, sizeof(mtrl));
-                mtrl.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
-                mtrl.Ambient = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
-                device->SetMaterial(&mtrl);
-            }
-        } else {
-            // No texture var at all
-            FF_LOG("Material %s has no base texture", material->GetName());
-            device->SetTexture(0, nullptr);
-            device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
-            device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-        }
-
-        // Disable unused texture stages
-        device->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
-        device->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
-
-        // Setup alpha blending
-        bool isTranslucent = material->IsTranslucent();
-        device->SetRenderState(D3DRS_ALPHABLENDENABLE, isTranslucent ? TRUE : FALSE);
-        if (isTranslucent) {
-            device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-            device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-        }
-
-        bool hasTexture = FindAndSetTexture(device, material);
-        if (!hasTexture) {
-            // Set fallback color/material
-            D3DMATERIAL9 mtrl;
-            ZeroMemory(&mtrl, sizeof(mtrl));
-            mtrl.Diffuse = D3DXCOLOR(0.7f, 0.7f, 0.7f, 1.0f);  // Light grey
-            mtrl.Ambient = D3DXCOLOR(0.3f, 0.3f, 0.3f, 1.0f);
-            device->SetMaterial(&mtrl);
-
-            // Set texture stages for color-only rendering
-            device->SetTexture(0, nullptr);
-            device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
-            device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-            device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
-            device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
         }
         
-        // Disable fog for now (if it's causing issues)
-        device->SetRenderState(D3DRS_FOGENABLE, FALSE);
+        vb->Release();
 
-        if (shouldLog) {
-            FF_LOG("Fixed function pipeline setup complete for material: %s", material->GetName());
+        // Set render states based on material type
+        if (isModel) {
+            SetupModelStates(device, material, sourceFormat);
         }
+        else if (isGUI) {
+            SetupGUIStates(device);
+        }
+        else {
+            SetupWorldStates(device);
+        }
+
+        // Setup textures
+        SetupTextures(device, material);
+
+        FF_LOG("Fixed function setup complete");
     }
     catch (const std::exception& e) {
         FF_WARN("Exception in SetupFixedFunction: %s", e.what());
-        // Try to restore to a safe state
         device->SetTexture(0, nullptr);
         device->SetVertexShader(nullptr);
         device->SetPixelShader(nullptr);
