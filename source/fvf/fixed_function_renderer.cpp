@@ -217,19 +217,8 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
     FF_LOG(">>> RenderWithFixedFunction Called <<<");
 
     if (!m_stateManager) {
-        FF_WARN("No state manager available - reinitializing...");
-        try {
-            m_stateManager = std::make_unique<FixedFunctionState>();
-            if (!m_stateManager) {
-                FF_WARN("Failed to create state manager during recovery");
-                return false;
-            }
-            FF_LOG("State manager recreated successfully");
-        }
-        catch (const std::exception& e) {
-            FF_WARN("Exception creating state manager during recovery: %s", e.what());
-            return false;
-        }
+        FF_WARN("No state manager available");
+        return false;
     }
 
     try {
@@ -239,10 +228,73 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
         FF_LOG("Setting up fixed function state");
         m_stateManager->SetupFixedFunction(device, format, material, true);
 
+        FF_LOG("Preparing for draw call:");
+        FF_LOG("  PrimitiveType: %d", primType);
+        FF_LOG("  BaseVertexIndex: %d", baseVertexIndex);
+        FF_LOG("  MinVertexIndex: %d", minVertexIndex);
+        FF_LOG("  NumVertices: %d", numVertices);
+        FF_LOG("  StartIndex: %d", startIndex);
+        FF_LOG("  PrimCount: %d", primCount);
+
+        // Validate parameters
+        if (numVertices == 0 || primCount == 0) {
+            FF_WARN("Invalid vertex or primitive count");
+            return false;
+        }
+
+        // Get current vertex/index buffers to validate
+        IDirect3DVertexBuffer9* vb = nullptr;
+        UINT vbOffset = 0, stride = 0;
+        device->GetStreamSource(0, &vb, &vbOffset, &stride);
+        
+        IDirect3DIndexBuffer9* ib = nullptr;
+        device->GetIndices(&ib);
+
+        if (!vb || !ib) {
+            FF_WARN("Missing vertex or index buffer");
+            if (vb) vb->Release();
+            if (ib) ib->Release();
+            return false;
+        }
+
+        FF_LOG("  VertexBuffer: %p", vb);
+        FF_LOG("  IndexBuffer: %p", ib);
+        FF_LOG("  Stride: %d", stride);
+
+        // Get vertex buffer size
+        D3DVERTEXBUFFER_DESC vbDesc;
+        if (SUCCEEDED(vb->GetDesc(&vbDesc))) {
+            FF_LOG("  VB Size: %d bytes", vbDesc.Size);
+            if (numVertices * stride > vbDesc.Size) {
+                FF_WARN("Vertex count exceeds buffer size");
+                vb->Release();
+                ib->Release();
+                return false;
+            }
+        }
+
+        // Get index buffer size
+        D3DINDEXBUFFER_DESC ibDesc;
+        if (SUCCEEDED(ib->GetDesc(&ibDesc))) {
+            FF_LOG("  IB Size: %d bytes", ibDesc.Size);
+            UINT indexSize = ibDesc.Format == D3DFMT_INDEX16 ? 2 : 4;
+            if ((startIndex + primCount * 3) * indexSize > ibDesc.Size) {
+                FF_WARN("Index count exceeds buffer size");
+                vb->Release();
+                ib->Release();
+                return false;
+            }
+        }
+
+        vb->Release();
+        ib->Release();
+
         FF_LOG("Performing draw call");
         HRESULT hr = device->DrawIndexedPrimitive(
             primType, baseVertexIndex, minVertexIndex,
             numVertices, startIndex, primCount);
+
+        FF_LOG("Draw call result: 0x%x", hr);
 
         FF_LOG("Restoring state");
         m_stateManager->Restore(device);
@@ -257,6 +309,13 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
     }
     catch (const std::exception& e) {
         FF_WARN("Exception in RenderWithFixedFunction: %s", e.what());
+        if (m_stateManager) {
+            m_stateManager->Restore(device);
+        }
+        return false;
+    }
+    catch (...) {
+        FF_WARN("Unknown exception in RenderWithFixedFunction");
         if (m_stateManager) {
             m_stateManager->Restore(device);
         }

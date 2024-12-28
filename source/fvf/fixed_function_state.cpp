@@ -2,6 +2,7 @@
 #include "fixed_function_state.h"
 #include <tier0/dbg.h>
 #include "ff_logging.h"
+#include <d3d9.h>
 
 FixedFunctionState::FixedFunctionState() {
     FF_LOG("Creating FixedFunctionState instance");
@@ -12,6 +13,114 @@ FixedFunctionState::~FixedFunctionState() {
     if (m_state.vertexShader) m_state.vertexShader->Release();
     if (m_state.pixelShader) m_state.pixelShader->Release();
 }
+
+bool FixedFunctionState::FindAndSetTexture(IDirect3DDevice9* device, IMaterial* material) {
+    if (!device || !material) {
+        FF_WARN("Invalid device or material in FindAndSetTexture");
+        return false;
+    }
+
+    FF_LOG("Attempting to set texture for material: %s", material->GetName());
+
+    try {
+        // Safely get texture var
+        IMaterialVar* textureVar = material->FindVar("$basetexture", nullptr);
+        if (!textureVar) {
+            FF_LOG("No $basetexture var for material %s", material->GetName());
+            goto USE_FALLBACK;
+        }
+
+        FF_LOG("Found $basetexture var for %s", material->GetName());
+
+        if (!textureVar->IsDefined()) {
+            FF_LOG("$basetexture not defined for material %s", material->GetName());
+            goto USE_FALLBACK;
+        }
+
+        // Safely get texture handle
+        void* texHandle = nullptr;
+        try {
+            FF_LOG("Getting texture value for %s", material->GetName());
+            texHandle = textureVar->GetTextureValue();
+            FF_LOG("Got texture handle: %p", texHandle);
+        }
+        catch (...) {
+            FF_WARN("Exception getting texture value for material %s", material->GetName());
+            goto USE_FALLBACK;
+        }
+
+        if (!texHandle) {
+            FF_LOG("Null texture handle for material %s", material->GetName());
+            goto USE_FALLBACK;
+        }
+
+        // Safely cast and set texture
+        IDirect3DBaseTexture9* d3dtex = static_cast<IDirect3DBaseTexture9*>(texHandle);
+        if (!d3dtex) {
+            FF_LOG("Failed to cast texture for material %s", material->GetName());
+            goto USE_FALLBACK;
+        }
+
+        FF_LOG("Checking texture type for %s", material->GetName());
+        // Verify texture type
+        D3DRESOURCETYPE texType = d3dtex->GetType();
+        FF_LOG("Texture type: %d", texType);
+        
+        if (texType != D3DRTYPE_TEXTURE && texType != D3DRTYPE_CUBETEXTURE) {
+            FF_WARN("Invalid texture type %d for material %s", texType, material->GetName());
+            goto USE_FALLBACK;
+        }
+
+        FF_LOG("Setting texture for %s", material->GetName());
+        // Set texture with error checking
+        HRESULT hr = device->SetTexture(0, d3dtex);
+        if (FAILED(hr)) {
+            FF_WARN("Failed to set texture for material %s (HRESULT: 0x%x)", 
+                material->GetName(), hr);
+            goto USE_FALLBACK;
+        }
+
+        FF_LOG("Successfully set texture for %s", material->GetName());
+
+        // Setup texture stages safely
+        FF_LOG("Setting up texture stages for %s", material->GetName());
+        device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+        device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+        device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+
+        return true;
+
+    USE_FALLBACK:
+        FF_LOG("Using fallback rendering for %s", material->GetName());
+        // Safe fallback state
+        device->SetTexture(0, nullptr);
+        device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
+        device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+        device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
+        device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+
+        // Set a default material color
+        D3DMATERIAL9 mtrl;
+        ZeroMemory(&mtrl, sizeof(mtrl));
+        mtrl.Diffuse = D3DXCOLOR(0.7f, 0.7f, 0.7f, 1.0f);
+        mtrl.Ambient = D3DXCOLOR(0.3f, 0.3f, 0.3f, 1.0f);
+        device->SetMaterial(&mtrl);
+
+        return false;
+    }
+    catch (const std::exception& e) {
+        FF_WARN("Exception in FindAndSetTexture for %s: %s", 
+            material->GetName(), e.what());
+        return false;
+    }
+    catch (...) {
+        FF_WARN("Unknown exception in FindAndSetTexture for %s", 
+            material->GetName());
+        return false;
+    }
+}
+
 
 void FixedFunctionState::Store(IDirect3DDevice9* device) {
     if (!device) return;
@@ -280,6 +389,23 @@ void FixedFunctionState::SetupFixedFunction(
         if (isTranslucent) {
             device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
             device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+        }
+
+        bool hasTexture = FindAndSetTexture(device, material);
+        if (!hasTexture) {
+            // Set fallback color/material
+            D3DMATERIAL9 mtrl;
+            ZeroMemory(&mtrl, sizeof(mtrl));
+            mtrl.Diffuse = D3DXCOLOR(0.7f, 0.7f, 0.7f, 1.0f);  // Light grey
+            mtrl.Ambient = D3DXCOLOR(0.3f, 0.3f, 0.3f, 1.0f);
+            device->SetMaterial(&mtrl);
+
+            // Set texture stages for color-only rendering
+            device->SetTexture(0, nullptr);
+            device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
+            device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+            device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
+            device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
         }
         
         // Disable fog for now (if it's causing issues)

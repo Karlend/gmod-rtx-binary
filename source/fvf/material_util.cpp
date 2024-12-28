@@ -23,6 +23,7 @@ namespace MaterialUtil {
             "particle/*",    // Particle materials
             "*_rt",          // Render targets
             "dev/*",         // Development textures
+            "skybox/*",         // Development textures
         };
 
         // Simple wildcard check function
