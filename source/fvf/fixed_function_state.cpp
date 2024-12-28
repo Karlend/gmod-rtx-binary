@@ -85,7 +85,7 @@ void FixedFunctionState::Restore(IDirect3DDevice9* device) {
     FF_LOG("Device state restored");
 }
 
-oid FixedFunctionState::SetupFixedFunction(
+void FixedFunctionState::SetupFixedFunction(
     IDirect3DDevice9* device,
     VertexFormat_t sourceFormat,
     IMaterial* material)

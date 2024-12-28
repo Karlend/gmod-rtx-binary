@@ -1,5 +1,6 @@
 #include "fixed_function_renderer.h"
 #include "fixed_function_state.h"
+#include "vertex_format.h"
 #include "material_util.h"
 #include <tier0/dbg.h>
 
@@ -81,7 +82,7 @@ void FixedFunctionRenderer::Shutdown() {
 bool FixedFunctionRenderer::RenderWithFixedFunction(
     IDirect3DDevice9* device,
     IMaterial* material,
-    FFVertexFormat::VertexFormat_t format,
+    VertexFormat_t format,
     D3DPRIMITIVETYPE primType,
     INT baseVertexIndex,
     UINT minVertexIndex,

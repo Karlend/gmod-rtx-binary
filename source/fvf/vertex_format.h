@@ -1,9 +1,9 @@
-// vertex_format.h
 #pragma once
 
-#ifndef VERTEX_FORMAT_T_DEFINED
+// Only define if not already defined in Source SDK
+#if !defined(VERTEX_FORMAT_T_DEFINED) && !defined(VERTEX_FORMAT_T)
 #define VERTEX_FORMAT_T_DEFINED
-typedef unsigned int VertexFormat_t;
+#define VERTEX_FORMAT_T
 #endif
 
 // Vertex format flags
