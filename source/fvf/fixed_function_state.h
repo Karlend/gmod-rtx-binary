@@ -1,8 +1,14 @@
-// fixed_function_state.h
 #pragma once
 #include <d3d9.h>
+#include <d3dx9.h>
 #include "materialsystem/imaterialsystem.h"
+#include "materialsystem/imaterial.h"
+#include "vertex_format.h"
 #include <vector>
+
+// Forward declare
+class IMaterial;
+extern IMaterialSystem* materials;
 
 class FixedFunctionState {
 public:
@@ -11,7 +17,9 @@ public:
 
     void Store(IDirect3DDevice9* device);
     void Restore(IDirect3DDevice9* device);
-    void SetupFixedFunction(IDirect3DDevice9* device, VertexFormat_t sourceFormat, IMaterial* material);
+    void SetupFixedFunction(IDirect3DDevice9* device, 
+        VertexFormat_t sourceFormat, 
+        IMaterial* material);
 
 private:
     struct TextureStageState {

@@ -1,0 +1,24 @@
+// vertex_format.h
+#pragma once
+
+#ifndef VERTEX_FORMAT_T_DEFINED
+#define VERTEX_FORMAT_T_DEFINED
+typedef unsigned int VertexFormat_t;
+#endif
+
+// Vertex format flags
+#define FF_VERTEX_POSITION      0x0001u
+#define FF_VERTEX_NORMAL        0x0002u
+#define FF_VERTEX_COLOR         0x0004u
+#define FF_VERTEX_SPECULAR      0x0008u
+#define FF_VERTEX_TEXCOORD0     0x0010u
+#define FF_VERTEX_TEXCOORD1     0x0020u
+#define FF_VERTEX_TEXCOORD2     0x0040u
+#define FF_VERTEX_TEXCOORD3     0x0080u
+#define FF_VERTEX_TEXCOORD4     0x0100u
+#define FF_VERTEX_TEXCOORD5     0x0200u
+#define FF_VERTEX_TEXCOORD6     0x0400u
+#define FF_VERTEX_TEXCOORD7     0x0800u
+#define FF_VERTEX_TANGENT       0x1000u
+#define FF_VERTEX_BONE_WEIGHTS  0x2000u
+#define FF_VERTEX_BONE_INDEX    0x4000u

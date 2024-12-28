@@ -184,13 +184,6 @@ LUA_FUNCTION(DrawRTXLights) {
     }
 }
 
-LUA_FUNCTION(RTX_SetLoggingInterval) {
-    float interval = LUA->CheckNumber(1);
-    if (interval <= 0) interval = 0.016f;  // Minimum 16ms
-    RenderStateLogger::Instance().SetLoggingInterval(interval);
-    return 0;
-}
-
 void* FindD3D9Device() {
     auto shaderapidx = GetModuleHandle("shaderapidx9.dll");
     if (!shaderapidx) {
@@ -217,80 +210,54 @@ void* FindD3D9Device() {
     return device;
 }
 
-LUA_FUNCTION(RTX_SetWorldFVF) {
-    bool enable = LUA->GetBool(1);
-    RenderModeManager::Instance().EnableFVFForWorld(enable);
-    Msg("[RTX] World FVF %s\n", enable ? "enabled" : "disabled");
-    return 0;
-}
-
-LUA_FUNCTION(RTX_SetModelFVF) {
-    bool enable = LUA->GetBool(1);
-    RenderModeManager::Instance().EnableFVFForModels(enable);
-    Msg("[RTX] Model FVF %s\n", enable ? "enabled" : "disabled");
-    return 0;
-}
-
-GMOD_MODULE_OPEN() { 
+GMOD_MODULE_OPEN() {
     try {
-        Msg("[RTX FVF Module] - Module loaded!\n"); 
-
-        // Find Source's D3D9 device
+        // Find D3D device (keep existing code)
         auto sourceDevice = static_cast<IDirect3DDevice9Ex*>(FindD3D9Device());
         if (!sourceDevice) {
-            LUA->ThrowError("[RTX FVF] Failed to find D3D9 device");
+            LUA->ThrowError("[RTX] Failed to find D3D9 device");
             return 0;
         }
 
-        // Initialize RenderStateLogger first
-        RenderStateLogger::Instance().Initialize(sourceDevice);
+        // Initialize fixed function renderer
+        FixedFunctionRenderer::Instance().Initialize(sourceDevice);
 
-        // Then initialize RenderModeManager
-        RenderModeManager::Instance().Initialize(sourceDevice);
-        RenderModeManager::Instance().EnableFVFForWorld(true);
-        RenderModeManager::Instance().EnableFVFForModels(true);
+        // Setup ConVar callback
+        rtx_ff_enable.InstallChangeCallback(FF_EnableChanged);
 
-        // Register Lua functions
-        LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB); 
+        // Create Lua interface
+        LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
 
-        // Create RTX table
+        // Create FF table
         LUA->CreateTable();
 
-        // Add FVF functions
-        LUA->PushCFunction(RTX_SetWorldFVF);
-        LUA->SetField(-2, "SetWorldFVF");
-        
-        LUA->PushCFunction(RTX_SetModelFVF);
-        LUA->SetField(-2, "SetModelFVF");
+        // Add functions
+        LUA->PushCFunction(FF_Enable);
+        LUA->SetField(-2, "Enable");
 
-        // Add logging functions
-        LUA->PushCFunction(RTX_StartLogging);
-        LUA->SetField(-2, "StartLogging");
-        
-        LUA->PushCFunction(RTX_StopLogging);
-        LUA->SetField(-2, "StopLogging");
-        
-        LUA->PushCFunction(RTX_SetLoggingInterval);
-        LUA->SetField(-2, "SetLoggingInterval");
-        
-        // Add status fields
-        LUA->PushBool(true);
-        LUA->SetField(-2, "Loaded");
+        LUA->PushCFunction(FF_GetStats);
+        LUA->SetField(-2, "GetStats");
+
+        // Add version info
+        LUA->PushString("1.0");
+        LUA->SetField(-2, "Version");
 
         // Set the table in _G
-        LUA->SetField(-2, "RTX");
-        
-        // Initialize RenderStateLogger
-        RenderStateLogger::Instance().Initialize(sourceDevice);
-        
-        // Clean up stack
+        LUA->SetField(-2, "FixedFunction");
+
+        // Pop global table
         LUA->Pop();
 
-        Msg("[RTX FVF] Module interface registered successfully\n");
+        Msg("[Fixed Function] Module loaded successfully\n");
         return 0;
     }
-    catch (...) {
-        Error("[RTX FVF] Exception in module initialization\n");
+    catch (const std::exception& e) {
+        Error("[Fixed Function] Failed to load module: %s\n", e.what());
         return 0;
     }
+}
+
+GMOD_MODULE_CLOSE() {
+    FixedFunctionRenderer::Instance().Shutdown();
+    return 0;
 }

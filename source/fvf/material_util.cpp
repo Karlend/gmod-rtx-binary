@@ -1,3 +1,5 @@
+#include "material_util.h"
+
 namespace MaterialUtil {
     bool ShouldUseFixedFunction(IMaterial* material) {
         if (!material) return false;

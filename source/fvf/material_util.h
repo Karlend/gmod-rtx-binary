@@ -1,5 +1,7 @@
-We#pragma once
+#pragma once
 #include "materialsystem/imaterialsystem.h"
+#include "materialsystem/imaterial.h"
+#include "tier0/dbg.h"
 
 /*
 Material utility functions

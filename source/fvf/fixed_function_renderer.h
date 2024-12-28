@@ -2,7 +2,12 @@
 #include <d3d9.h>
 #include <memory>
 #include "materialsystem/imaterialsystem.h"
+#include "materialsystem/imaterial.h"
+#include "vertex_format.h"
 #include "detouring/hook.hpp"
+
+// Forward declare
+extern IMaterialSystem* materials;
 
 class FixedFunctionState;
 

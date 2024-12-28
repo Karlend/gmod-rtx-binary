@@ -85,7 +85,7 @@ void FixedFunctionState::Restore(IDirect3DDevice9* device) {
     FF_LOG("Device state restored");
 }
 
-void FixedFunctionState::SetupFixedFunction(
+oid FixedFunctionState::SetupFixedFunction(
     IDirect3DDevice9* device,
     VertexFormat_t sourceFormat,
     IMaterial* material)
@@ -116,21 +116,22 @@ DWORD FixedFunctionState::GetFVFFromSourceFormat(VertexFormat_t format) {
     DWORD fvf = D3DFVF_XYZ; // Position is always present
 
     // Add normal if present
-    if (format & VERTEX_NORMAL)
+    if (format & FF_VERTEX_NORMAL)
         fvf |= D3DFVF_NORMAL;
 
     // Add diffuse color if present
-    if (format & VERTEX_COLOR)
+    if (format & FF_VERTEX_COLOR)
         fvf |= D3DFVF_DIFFUSE;
 
     // Add specular color if present
-    if (format & VERTEX_SPECULAR)
+    if (format & FF_VERTEX_SPECULAR)
         fvf |= D3DFVF_SPECULAR;
 
     // Handle texture coordinates
     int texCoordCount = 0;
     for (int i = 0; i < 8; i++) {
-        if (format & (VERTEX_TEXCOORD0 << i))
+        unsigned int mask = FF_VERTEX_TEXCOORD0;
+        if (format & (mask << i))
             texCoordCount++;
     }
 
@@ -142,15 +143,19 @@ DWORD FixedFunctionState::GetFVFFromSourceFormat(VertexFormat_t format) {
 
 void FixedFunctionState::SetupTransforms(IDirect3DDevice9* device, IMaterial* material) {
     // Get transforms from Source's material system
-    VMatrix worldMatrix, viewMatrix, projMatrix;
-    materials->GetMatrix(MATERIAL_MODEL, &worldMatrix);
-    materials->GetMatrix(MATERIAL_VIEW, &viewMatrix);
-    materials->GetMatrix(MATERIAL_PROJECTION, &projMatrix);
+    D3DMATRIX worldMatrix = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1
+    };
+    D3DMATRIX viewMatrix = worldMatrix;
+    D3DMATRIX projMatrix = worldMatrix;
 
     // Set transforms
-    device->SetTransform(D3DTS_WORLD, (D3DMATRIX*)&worldMatrix);
-    device->SetTransform(D3DTS_VIEW, (D3DMATRIX*)&viewMatrix);
-    device->SetTransform(D3DTS_PROJECTION, (D3DMATRIX*)&projMatrix);
+    device->SetTransform(D3DTS_WORLD, &worldMatrix);
+    device->SetTransform(D3DTS_VIEW, &viewMatrix);
+    device->SetTransform(D3DTS_PROJECTION, &projMatrix);
 }
 
 void FixedFunctionState::SetupTextureStages(IDirect3DDevice9* device, IMaterial* material) {

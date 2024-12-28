@@ -81,7 +81,7 @@ void FixedFunctionRenderer::Shutdown() {
 bool FixedFunctionRenderer::RenderWithFixedFunction(
     IDirect3DDevice9* device,
     IMaterial* material,
-    VertexFormat_t format,
+    FFVertexFormat::VertexFormat_t format,
     D3DPRIMITIVETYPE primType,
     INT baseVertexIndex,
     UINT minVertexIndex,
@@ -132,7 +132,7 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     UINT StartIndex,
     UINT PrimitiveCount)
 {
-    auto& instance = Instance();
+    auto& instance = Instance();  // Get instance first
     instance.m_stats.totalDrawCalls++;
 
     // Get current material
@@ -144,7 +144,10 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     }
 
     // For testing: Use a basic vertex format that should work with most geometry
-    VertexFormat_t format = VERTEX_POSITION | VERTEX_NORMAL | VERTEX_TEXCOORD0;
+    VertexFormat_t format = 
+        FF_VERTEX_POSITION | 
+        FF_VERTEX_NORMAL | 
+        FF_VERTEX_TEXCOORD0;
     
     static float lastMaterialLog = 0.0f;
     float currentTime = Plat_FloatTime();
