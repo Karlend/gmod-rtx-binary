@@ -5,7 +5,7 @@
 
 extern IMaterialSystem* materials;
 
-HRESULT WINAPI SetFVF_Detour(IDirect3DDevice9* device, DWORD FVF) {
+HRESULT WINAPI RenderModeManager::SetFVF_Detour(IDirect3DDevice9* device, DWORD FVF) {
     static float s_lastDebugTime = 0.0f;
     float currentTime = GetTickCount64() / 1000.0f;
 
@@ -33,7 +33,7 @@ HRESULT WINAPI SetFVF_Detour(IDirect3DDevice9* device, DWORD FVF) {
 }
 
 // Add DrawPrimitive hook
-HRESULT WINAPI DrawPrimitive_Detour(IDirect3DDevice9* device,
+HRESULT WINAPI RenderModeManager::DrawPrimitive_Detour(IDirect3DDevice9* device,
     D3DPRIMITIVETYPE PrimitiveType,
     UINT StartVertex,
     UINT PrimitiveCount) {
@@ -51,7 +51,7 @@ HRESULT WINAPI DrawPrimitive_Detour(IDirect3DDevice9* device,
     return manager.m_originalDrawPrimitive(device, PrimitiveType, StartVertex, PrimitiveCount);
 }
 
-HRESULT WINAPI DrawIndexedPrimitive_Detour(IDirect3DDevice9* device,
+HRESULT WINAPI RenderModeManager::DrawIndexedPrimitive_Detour(IDirect3DDevice9* device,
     D3DPRIMITIVETYPE PrimitiveType,
     INT BaseVertexIndex,
     UINT MinVertexIndex,
@@ -77,7 +77,7 @@ HRESULT WINAPI DrawIndexedPrimitive_Detour(IDirect3DDevice9* device,
         NumVertices, StartIndex, PrimitiveCount);
 }
 
-HRESULT WINAPI SetVertexDeclaration_Detour(IDirect3DDevice9* device, IDirect3DVertexDeclaration9* decl) {
+HRESULT WINAPI RenderModeManager::SetVertexDeclaration_Detour(IDirect3DDevice9* device, IDirect3DVertexDeclaration9* decl) {
     auto& manager = RenderModeManager::Instance();
     
     if (manager.ShouldUseFVF()) {
@@ -95,7 +95,7 @@ HRESULT WINAPI SetVertexDeclaration_Detour(IDirect3DDevice9* device, IDirect3DVe
     return manager.m_originalSetVertexDeclaration(device, decl);
 }
 
-HRESULT WINAPI SetStreamSource_Detour(IDirect3DDevice9* device, 
+HRESULT WINAPI RenderModeManager::SetStreamSource_Detour(IDirect3DDevice9* device, 
     UINT StreamNumber, IDirect3DVertexBuffer9* pStreamData,
     UINT OffsetInBytes, UINT Stride) {
     
@@ -118,6 +118,13 @@ HRESULT WINAPI SetStreamSource_Detour(IDirect3DDevice9* device,
     
     return manager.m_originalSetStreamSource(device, StreamNumber, 
         pStreamData, OffsetInBytes, Stride);
+}
+
+void RenderStateLogger::LogVertexFormat(DWORD fvf, const char* context) {
+    if (!ShouldLog()) return;
+    
+    std::lock_guard<std::mutex> lock(m_mutex);
+    LogMessage("Vertex Format (from %s): %s\n", context, FormatFVF(fvf).c_str());
 }
 
 RenderModeManager& RenderModeManager::Instance() {
