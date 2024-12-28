@@ -6,6 +6,10 @@
 #include "vertex_format.h"
 #include "detouring/hook.hpp"
 
+#define FF_LOG(fmt, ...) Msg("[Fixed Function] " fmt "\n", ##__VA_ARGS__)
+#define FF_WARN(fmt, ...) Warning("[Fixed Function] " fmt "\n", ##__VA_ARGS__)
+
+
 // Forward declare
 extern IMaterialSystem* materials;
 
@@ -25,6 +29,11 @@ public:
     
     void Initialize(IDirect3DDevice9* device);
     void Shutdown();
+
+    void SetEnabled(bool enable) {
+        m_enabled = enable;
+        FF_LOG("Renderer %s", enable ? "enabled" : "disabled");
+    }
 
 private:
     IDirect3DDevice9* m_device = nullptr;
@@ -61,4 +70,5 @@ private:
         UINT PrimitiveCount);
 
         RenderStats m_stats;
+        bool m_enabled = false;
 };

@@ -1,34 +1,26 @@
 if not CLIENT then return end
 
-local function InitializeFixedFunction()
-    local FF = _G.FixedFunction
-    if not FF then
-        Error("[Fixed Function] Module not loaded properly! Retrying in 1 second...\n")
-        timer.Simple(1, InitializeFixedFunction)
+-- Simple state tracking
+local ff_enabled = false
+
+local function InitFF()
+    if not _G.FixedFunction then
+        ErrorNoHalt("[Fixed Function] Module not loaded, retrying in 1 second...\n")
+        timer.Simple(1, InitFF)
         return
     end
 
-    -- Create ConVars
-    CreateClientConVar("rtx_ff_debug_hud", "1", true, false, "Show fixed function debug HUD")
+    local FF = _G.FixedFunction
 
-    -- Add commands
+    -- Create toggle command
     concommand.Add("ff_toggle", function()
-        if not FF.Enable then 
-            Error("[Fixed Function] Module interface not available!\n")
-            return
-        end
-        
-        local current = GetConVar("rtx_ff_enable"):GetBool()
-        Msg(string.format("[Fixed Function] Toggling state from %s to %s\n", 
-            current and "on" or "off",
-            (not current) and "on" or "off"))
-        
-        FF.Enable(not current)
+        ff_enabled = not ff_enabled
+        print(string.format("[Fixed Function] %s", ff_enabled and "Enabled" or "Disabled"))
+        FF.Enable(ff_enabled)
     end)
 
-    Msg(string.format("[Fixed Function] Module v%s loaded successfully\n", FF.Version))
-    Msg("[Fixed Function] Use ff_toggle to toggle fixed function pipeline\n")
+    print("[Fixed Function] Interface loaded - Version:", FF.Version)
 end
 
--- Start initialization
-hook.Add("Initialize", "FixedFunctionInit", InitializeFixedFunction)
+-- Initialize when game is ready
+hook.Add("InitPostEntity", "FixedFunctionInit", InitFF)

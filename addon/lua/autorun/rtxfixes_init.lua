@@ -7,5 +7,5 @@ require((BRANCH == "x86-64" or BRANCH == "chromium" ) and "RTXFixesBinary" or "R
 if RTX and RTX.Loaded then
     print("[RTX FVF] Module loaded successfully")
 else
-    ErrorNoHalt("[RTX FVF] Failed to load module\n")
+
 end

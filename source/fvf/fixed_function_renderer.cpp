@@ -4,10 +4,6 @@
 #include "material_util.h"
 #include <tier0/dbg.h>
 
-// Debug helpers - expanded
-#define FF_LOG(fmt, ...) Msg("[Fixed Function] " fmt "\n", ##__VA_ARGS__)
-#define FF_WARN(fmt, ...) Warning("[Fixed Function] " fmt "\n", ##__VA_ARGS__)
-
 void RenderStats::Reset() {
     totalDrawCalls = 0;
     fixedFunctionDrawCalls = 0;
