@@ -8,8 +8,10 @@ HRESULT WINAPI SetFVF_Detour(IDirect3DDevice9* device, DWORD FVF) {
     auto& manager = RenderModeManager::Instance();
     
     if (manager.ShouldUseFVF()) {
+        Msg("[RTX FVF] Using FVF mode: 0x%x\n", FVF);
         return manager.m_originalSetFVF(device, FVF);
     } else {
+        Msg("[RTX FVF] Converting FVF to declaration: 0x%x\n", FVF);
         auto decl = manager.CreateFVFDeclaration(FVF);
         if (decl) {
             return manager.m_originalSetVertexDeclaration(device, decl);
@@ -215,20 +217,36 @@ void RenderModeManager::Shutdown() {
 void RenderModeManager::EnableFVFForWorld(bool enable) {
     EnterCriticalSection(&m_cs);
     m_worldFVFEnabled = enable;
+    Msg("[RTX FVF] World FVF %s\n", enable ? "enabled" : "disabled");
     LeaveCriticalSection(&m_cs);
 }
 
 void RenderModeManager::EnableFVFForModels(bool enable) {
     EnterCriticalSection(&m_cs);
     m_modelsFVFEnabled = enable;
+    Msg("[RTX FVF] Model FVF %s\n", enable ? "enabled" : "disabled");
     LeaveCriticalSection(&m_cs);
 }
 
 bool RenderModeManager::ShouldUseFVF() const {
-    if (!m_initialized) return false;
+    if (!m_initialized) {
+        Msg("[RTX FVF] Manager not initialized\n");
+        return false;
+    }
     
-    if (m_worldFVFEnabled && IsWorldDrawing()) return true;
-    if (m_modelsFVFEnabled && IsModelDrawing()) return true;
+    bool isWorld = IsWorldDrawing();
+    bool isModel = IsModelDrawing();
+    
+    static float lastDebugTime = 0.0f;
+    float currentTime = GetTickCount64() / 1000.0f;
+    if (currentTime - lastDebugTime > 1.0f) {
+        Msg("[RTX FVF] Draw type - World: %d, Model: %d, FVF enabled - World: %d, Model: %d\n",
+            isWorld, isModel, m_worldFVFEnabled, m_modelsFVFEnabled);
+        lastDebugTime = currentTime;
+    }
+
+    if (m_worldFVFEnabled && isWorld) return true;
+    if (m_modelsFVFEnabled && isModel) return true;
     
     return false;
 }
@@ -242,16 +260,28 @@ bool RenderModeManager::IsWorldDrawing() const {
     IMaterial* currentMaterial = renderContext->GetCurrentMaterial();
     if (!currentMaterial) return false;
 
-    // Check material/shader names used by world geometry
     const char* materialName = currentMaterial->GetName();
     const char* shaderName = currentMaterial->GetShaderName();
 
-    // Common world material patterns
-    return (strstr(materialName, "world") != nullptr ||
-            strstr(materialName, "brush") != nullptr ||
-            strstr(materialName, "displacement") != nullptr ||
-            // Add other world material patterns here
-            false);
+    static float lastDebugTime = 0.0f;
+    float currentTime = GetTickCount64() / 1000.0f;
+    if (currentTime - lastDebugTime > 1.0f) {
+        Msg("[RTX FVF] World Check - Material: %s, Shader: %s\n", 
+            materialName ? materialName : "null",
+            shaderName ? shaderName : "null");
+        lastDebugTime = currentTime;
+    }
+
+    // Expanded world material patterns
+    return (materialName && (
+        strstr(materialName, "world") != nullptr ||
+        strstr(materialName, "brush") != nullptr ||
+        strstr(materialName, "displacement") != nullptr ||
+        strstr(materialName, "concrete") != nullptr ||
+        strstr(materialName, "brick") != nullptr ||
+        strstr(materialName, "wall") != nullptr ||
+        strstr(materialName, "tile") != nullptr
+    ));
 }
 
 bool RenderModeManager::IsModelDrawing() const {
@@ -263,14 +293,26 @@ bool RenderModeManager::IsModelDrawing() const {
     IMaterial* currentMaterial = renderContext->GetCurrentMaterial();
     if (!currentMaterial) return false;
 
-    // Check if we're in a model rendering pass
     const char* materialName = currentMaterial->GetName();
     const char* shaderName = currentMaterial->GetShaderName();
 
-    return (strstr(materialName, "model") != nullptr ||
+    static float lastDebugTime = 0.0f;
+    float currentTime = GetTickCount64() / 1000.0f;
+    if (currentTime - lastDebugTime > 1.0f) {
+        Msg("[RTX FVF] Model Check - Material: %s, Shader: %s\n", 
+            materialName ? materialName : "null",
+            shaderName ? shaderName : "null");
+        lastDebugTime = currentTime;
+    }
+
+    return (
+        (materialName && strstr(materialName, "model") != nullptr) ||
+        (shaderName && (
             strstr(shaderName, "VertexLitGeneric") != nullptr ||
-            // Add other model material/shader patterns
-            false);
+            strstr(shaderName, "LightmappedGeneric") != nullptr ||
+            strstr(shaderName, "UnlitGeneric") != nullptr
+        ))
+    );
 }
 
 IDirect3DVertexDeclaration9* RenderModeManager::CreateFVFDeclaration(DWORD fvf) {

@@ -259,6 +259,16 @@ GMOD_MODULE_OPEN() {
         
         LUA->PushCFunction(RTX_SetModelFVF);
         LUA->SetField(-2, "SetModelFVF");
+
+        // Add logging functions
+        LUA->PushCFunction(RTX_StartLogging);
+        LUA->SetField(-2, "StartLogging");
+        
+        LUA->PushCFunction(RTX_StopLogging);
+        LUA->SetField(-2, "StopLogging");
+        
+        LUA->PushCFunction(RTX_SetLoggingInterval);
+        LUA->SetField(-2, "SetLoggingInterval");
         
         // Add status fields
         LUA->PushBool(true);
@@ -266,6 +276,9 @@ GMOD_MODULE_OPEN() {
 
         // Set the table in _G
         LUA->SetField(-2, "RTX");
+        
+        // Initialize RenderStateLogger
+        RenderStateLogger::Instance().Initialize(sourceDevice);
         
         // Clean up stack
         LUA->Pop();
