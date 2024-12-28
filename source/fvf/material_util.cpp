@@ -18,7 +18,8 @@ namespace MaterialUtil {
         static const char* supported_shaders[] = {
             "LightmappedGeneric",
             "VertexLitGeneric",
-            "UnlitGeneric"
+            "UnlitGeneric",
+            "WorldVertexTransition",
         };
 
         bool shouldUse = false;

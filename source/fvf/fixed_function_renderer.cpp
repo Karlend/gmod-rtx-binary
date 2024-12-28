@@ -273,88 +273,53 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     UINT StartIndex,
     UINT PrimitiveCount)
 {
-    static int recursionDepth = 0;
-    if (recursionDepth > 0) {
+    static bool isProcessing = false;
+    if (isProcessing) {
         // Prevent recursive calls
         return s_originalDrawIndexedPrimitive(
             device, PrimitiveType, BaseVertexIndex,
             MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
     }
-    
-    recursionDepth++;
-    auto& instance = Instance();
+
+    isProcessing = true;
     HRESULT result = D3D_OK;
 
     try {
+        auto& instance = Instance();
+        
         // Ensure materials interface is available
         if (!materials || !g_pMaterialSystem) {
             FF_LOG("MaterialSystem not available, using original path");
             result = s_originalDrawIndexedPrimitive(
                 device, PrimitiveType, BaseVertexIndex,
                 MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
-            recursionDepth--;
+            isProcessing = false;
             return result;
-        }
-
-        static bool first_call = true;
-        if (first_call) {
-            FF_LOG("First draw call intercepted!");
-            FF_LOG("Device: %p", device);
-            FF_LOG("MaterialSystem: %p", materials);
-            first_call = false;
-        }
-
-        if (!s_originalDrawIndexedPrimitive) {
-            FF_WARN("No original function available!");
-            recursionDepth--;
-            return D3D_OK;
-        }
-
-        static float lastDebugTime = 0.0f;
-        float currentTime = Plat_FloatTime();
-        
-        // Debug Print - Hook Interception
-        if (currentTime - lastDebugTime > 5.0f) {
-            IMaterial* currentMat = materials->GetRenderContext()->GetCurrentMaterial();
-            FF_LOG("Draw stats for last 5 seconds:");
-            FF_LOG("  Total draws: %d", instance.m_stats.totalDrawCalls);
-            FF_LOG("  FF draws: %d", instance.m_stats.fixedFunctionDrawCalls);
-            FF_LOG("  Current material: %s", currentMat ? currentMat->GetName() : "null");
-            lastDebugTime = currentTime;
         }
 
         instance.m_stats.totalDrawCalls++;
 
         // If fixed function is disabled, use original path
         if (!instance.m_enabled) {
-            FF_LOG("Fixed Function disabled, using original path");
             result = s_originalDrawIndexedPrimitive(
                 device, PrimitiveType, BaseVertexIndex,
                 MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
-            recursionDepth--;
+            isProcessing = false;
             return result;
         }
 
         // Get current material
         IMaterial* material = materials->GetRenderContext()->GetCurrentMaterial();
         if (!material) {
-            FF_LOG("No material found, using original path");
             result = s_originalDrawIndexedPrimitive(
                 device, PrimitiveType, BaseVertexIndex,
                 MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
-            recursionDepth--;
+            isProcessing = false;
             return result;
-        }
-
-        // Debug Print #2 - Material Info
-        if (currentTime - lastDebugTime > 1.0f) {
-            FF_LOG("Material: %s", material->GetName());
-            FF_LOG("Shader: %s", material->GetShaderName());
         }
 
         // Check if we should use fixed function
         if (MaterialUtil::ShouldUseFixedFunction(material)) {
-            FF_LOG(">>> Using Fixed Function Path <<<");
             instance.m_stats.fixedFunctionDrawCalls++;
 
             VertexFormat_t format = 
@@ -369,18 +334,12 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
                 StartIndex, PrimitiveCount);
 
             if (success) {
-                FF_LOG("Fixed Function render successful");
-                recursionDepth--;
+                isProcessing = false;
                 return D3D_OK;
             }
-            
-            FF_WARN("Fixed function render failed, using original path");
         }
 
-        // Update and log stats
-        instance.m_stats.LogIfNeeded();
-
-        FF_LOG("Using original render path");
+        // Use original path if fixed function failed or wasn't used
         result = s_originalDrawIndexedPrimitive(
             device, PrimitiveType, BaseVertexIndex,
             MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
@@ -398,6 +357,6 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
             MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
     }
 
-    recursionDepth--;
+    isProcessing = false;
     return result;
 }
