@@ -7,10 +7,10 @@
 #include "e_utils.h"
 #include <Windows.h>
 #include <d3d9.h>
+#include "tier0/dbg.h"
 #include "rtx_lights/rtx_light_manager.h"
 #include "shader_fixes/shader_hooks.h"
-#include "render_modes/render_mode_manager.h"
-#include "render_modes/render_state_logger.h"
+#include "fvf/fixed_function_renderer.h"
 
 #ifdef GMOD_MAIN
 extern IMaterialSystem* materials = NULL;
@@ -19,36 +19,36 @@ extern IMaterialSystem* materials = NULL;
 // extern IShaderAPI* g_pShaderAPI = NULL;
 remix::Interface* g_remix = nullptr;
 
-static ConVar rtx_world_fvf("rtx_world_fvf", "1", FCVAR_ARCHIVE, 
-    "Enable FVF for world geometry rendering");
-static ConVar rtx_model_fvf("rtx_model_fvf", "1", FCVAR_ARCHIVE, 
-    "Enable FVF for model rendering");
+static ConVar rtx_ff_enable("rtx_ff_enable", "1", FCVAR_ARCHIVE, "Enable fixed function pipeline");
+static ConVar rtx_ff_debug("rtx_ff_debug", "0", FCVAR_ARCHIVE, "Enable extra debug output for fixed function pipeline");
 
-// Add ConVar callbacks:
-void WorldFVFChanged(IConVar *var, const char *pOldValue, float flOldValue) {
-    RenderModeManager::Instance().EnableFVFForWorld(
-        static_cast<ConVar*>(var)->GetBool());
-}
-
-void ModelFVFChanged(IConVar *var, const char *pOldValue, float flOldValue) {
-    RenderModeManager::Instance().EnableFVFForModels(
-        static_cast<ConVar*>(var)->GetBool());
+// ConVar callback
+void FF_EnableChanged(IConVar *var, const char *pOldValue, float flOldValue) {
+    Msg("[Fixed Function] State changed to: %d\n", static_cast<ConVar*>(var)->GetBool());
 }
 
 using namespace GarrysMod::Lua;
 
-LUA_FUNCTION(RTX_StartLogging) {
-    RenderStateLogger::Instance().EnableLogging(true);
-    RenderStateLogger::Instance().ClearLog();
-    Msg("[RTX] Started render state logging\n");
+// Lua function to toggle fixed function
+LUA_FUNCTION(FF_Enable) {
+    bool enable = LUA->GetBool(1);
+    rtx_ff_enable.SetValue(enable);
+    Msg("[Fixed Function] %s via Lua\n", enable ? "Enabled" : "Disabled");
     return 0;
 }
 
-LUA_FUNCTION(RTX_StopLogging) {
-    RenderStateLogger::Instance().EnableLogging(false);
-    RenderStateLogger::Instance().ForceDump();
-    Msg("[RTX] Stopped render state logging and dumped to file\n");
-    return 0;
+LUA_FUNCTION(FF_GetStats) {
+    // Create table for stats
+    LUA->CreateTable();
+    
+    // Add some basic stats
+    LUA->PushNumber(0); // Example stat
+    LUA->SetField(-2, "total_draws");
+    
+    LUA->PushNumber(0); // Example stat
+    LUA->SetField(-2, "ff_draws");
+    
+    return 1;
 }
 
 LUA_FUNCTION(CreateRTXLight) {
