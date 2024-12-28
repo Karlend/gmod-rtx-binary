@@ -89,49 +89,54 @@ void FixedFunctionState::SetupFixedFunction(
     IDirect3DDevice9* device,
     VertexFormat_t sourceFormat,
     IMaterial* material,
-    bool enabled)  // Add enabled parameter
+    bool enabled)
 {
-    if (!device || !material) return;
+    FF_LOG(">>> SetupFixedFunction Called <<<");
+    FF_LOG("Material: %s", material ? material->GetName() : "null");
+    FF_LOG("Enabled: %s", enabled ? "YES" : "NO");
 
-    // Disable shaders
-    device->SetVertexShader(nullptr);
-    device->SetPixelShader(nullptr);
+    if (!device || !material) {
+        FF_WARN("Invalid device or material");
+        return;
+    }
 
-    // Setup vertex format
-    DWORD fvf = GetFVFFromSourceFormat(sourceFormat);
-    device->SetFVF(fvf);
+    try {
+        FF_LOG("Disabling shaders");
+        device->SetVertexShader(nullptr);
+        device->SetPixelShader(nullptr);
 
-    // Setup transforms
-    SetupTransforms(device, material);
+        FF_LOG("Setting FVF format");
+        DWORD fvf = GetFVFFromSourceFormat(sourceFormat);
+        device->SetFVF(fvf);
 
-    // Setup render states with obvious changes when enabled
-    device->SetRenderState(D3DRS_LIGHTING, FALSE);
-    device->SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW);
-    device->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+        FF_LOG("Setting up transforms");
+        SetupTransforms(device, material);
 
-    // For testing: Make obvious visual changes when enabled
-    if (enabled) {
-        // Force wireframe rendering
-        device->SetRenderState(D3DRS_FILLMODE, D3DFILL_WIREFRAME);
+        FF_LOG("Setting render states");
+        // Force obvious visual changes
+        HRESULT hr;
         
-        // Or force a specific color
-        device->SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_ARGB(255, 255, 0, 0));  // Bright red
-        device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
-        device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TFACTOR);
-    } else {
-        device->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
-    }
+        hr = device->SetRenderState(D3DRS_FILLMODE, D3DFILL_WIREFRAME);
+        FF_LOG("Set wireframe mode: %s", SUCCEEDED(hr) ? "SUCCESS" : "FAILED");
 
-    // Setup alpha blending based on material properties
-    bool isTranslucent = material->IsTranslucent();
-    device->SetRenderState(D3DRS_ALPHABLENDENABLE, isTranslucent ? TRUE : FALSE);
-    if (isTranslucent) {
-        device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-        device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-    }
+        hr = device->SetRenderState(D3DRS_LIGHTING, FALSE);
+        FF_LOG("Disable lighting: %s", SUCCEEDED(hr) ? "SUCCESS" : "FAILED");
 
-    FF_LOG("Fixed function pipeline configured for material: %s (enabled: %d)", 
-        material->GetName(), enabled);
+        // Force bright red color
+        hr = device->SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_ARGB(255, 255, 0, 0));
+        FF_LOG("Set color override: %s", SUCCEEDED(hr) ? "SUCCESS" : "FAILED");
+
+        hr = device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+        FF_LOG("Set color op: %s", SUCCEEDED(hr) ? "SUCCESS" : "FAILED");
+
+        hr = device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TFACTOR);
+        FF_LOG("Set color arg: %s", SUCCEEDED(hr) ? "SUCCESS" : "FAILED");
+
+        FF_LOG("Fixed function pipeline setup complete");
+    }
+    catch (const std::exception& e) {
+        FF_WARN("Exception in SetupFixedFunction: %s", e.what());
+    }
 }
 
 DWORD FixedFunctionState::GetFVFFromSourceFormat(VertexFormat_t format) {

@@ -79,24 +79,26 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
     UINT startIndex,
     UINT primCount)
 {
+    FF_LOG(">>> RenderWithFixedFunction Called <<<");
+
     if (!m_stateManager) {
         FF_WARN("No state manager available");
         return false;
     }
 
     try {
-        // Store current state
+        FF_LOG("Storing current state");
         m_stateManager->Store(device);
 
-        // Setup fixed function pipeline with obviously different state
-        m_stateManager->SetupFixedFunction(device, format, material, m_enabled);
+        FF_LOG("Setting up fixed function state");
+        m_stateManager->SetupFixedFunction(device, format, material, true);
 
-        // Render
+        FF_LOG("Performing draw call");
         HRESULT hr = device->DrawIndexedPrimitive(
             primType, baseVertexIndex, minVertexIndex,
             numVertices, startIndex, primCount);
 
-        // Restore state
+        FF_LOG("Restoring state");
         m_stateManager->Restore(device);
 
         if (FAILED(hr)) {
@@ -104,11 +106,12 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
             return false;
         }
 
+        FF_LOG("Fixed function render completed successfully");
         return true;
     }
     catch (const std::exception& e) {
         FF_WARN("Exception in RenderWithFixedFunction: %s", e.what());
-        m_stateManager->Restore(device);  // Try to restore state
+        m_stateManager->Restore(device);
         return false;
     }
 }
@@ -122,11 +125,23 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     UINT StartIndex,
     UINT PrimitiveCount)
 {
+    static float lastDebugTime = 0.0f;
+    float currentTime = Plat_FloatTime();
     auto& instance = Instance();
+    
+    // Debug Print #1 - Hook Interception
+    if (currentTime - lastDebugTime > 1.0f) {
+        FF_LOG(">>> Draw Hook Called <<<");
+        FF_LOG("Fixed Function Enabled: %s", instance.m_enabled ? "YES" : "NO");
+        FF_LOG("Primitive Count: %d, Vertices: %d", PrimitiveCount, NumVertices);
+        lastDebugTime = currentTime;
+    }
+
     instance.m_stats.totalDrawCalls++;
 
     // If fixed function is disabled, use original path
     if (!instance.m_enabled) {
+        FF_LOG("Fixed Function disabled, using original path");
         return instance.m_originalDrawIndexedPrimitive(
             device, PrimitiveType, BaseVertexIndex,
             MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
@@ -135,29 +150,23 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     // Get current material
     IMaterial* material = materials->GetRenderContext()->GetCurrentMaterial();
     if (!material) {
+        FF_LOG("No material found, using original path");
         return instance.m_originalDrawIndexedPrimitive(
             device, PrimitiveType, BaseVertexIndex,
             MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
     }
 
-    static float lastMaterialLog = 0.0f;
-    float currentTime = Plat_FloatTime();
-
-    // Add more detailed logging for testing
-    if (currentTime - lastMaterialLog > 1.0f) {
-        FF_LOG("Draw call info:");
-        FF_LOG("  Material: %s", material->GetName());
-        FF_LOG("  Shader: %s", material->GetShaderName());
-        FF_LOG("  Vertices: %d, Primitives: %d", NumVertices, PrimitiveCount);
-        FF_LOG("  Fixed Function: %s", instance.m_enabled ? "enabled" : "disabled");
-        lastMaterialLog = currentTime;
+    // Debug Print #2 - Material Info
+    if (currentTime - lastDebugTime > 1.0f) {
+        FF_LOG("Material: %s", material->GetName());
+        FF_LOG("Shader: %s", material->GetShaderName());
     }
 
     // Check if we should use fixed function
     if (MaterialUtil::ShouldUseFixedFunction(material)) {
+        FF_LOG(">>> Using Fixed Function Path <<<");
         instance.m_stats.fixedFunctionDrawCalls++;
 
-        // For testing: Use a basic vertex format that should work with most geometry
         VertexFormat_t format = 
             FF_VERTEX_POSITION | 
             FF_VERTEX_NORMAL | 
@@ -170,6 +179,7 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
             StartIndex, PrimitiveCount);
 
         if (success) {
+            FF_LOG("Fixed Function render successful");
             return D3D_OK;
         }
         
@@ -179,7 +189,7 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     // Update and log stats
     instance.m_stats.LogIfNeeded();
 
-    // Use original path
+    FF_LOG("Using original render path");
     return instance.m_originalDrawIndexedPrimitive(
         device, PrimitiveType, BaseVertexIndex,
         MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);

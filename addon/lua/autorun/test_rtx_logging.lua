@@ -77,5 +77,4 @@ if RTX and RTX.Loaded then
         RTX.Version or "unknown",
         RTX.RTXEnabled and "Enabled" or "Disabled"))
 else
-    print("RTX Module not loaded or initialized correctly!")
 end
