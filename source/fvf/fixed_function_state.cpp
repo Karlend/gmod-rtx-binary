@@ -88,7 +88,8 @@ void FixedFunctionState::Restore(IDirect3DDevice9* device) {
 void FixedFunctionState::SetupFixedFunction(
     IDirect3DDevice9* device,
     VertexFormat_t sourceFormat,
-    IMaterial* material)
+    IMaterial* material,
+    bool enabled)  // Add enabled parameter
 {
     if (!device || !material) return;
 
@@ -103,13 +104,34 @@ void FixedFunctionState::SetupFixedFunction(
     // Setup transforms
     SetupTransforms(device, material);
 
-    // Setup render states
-    SetupRenderStates(device, material);
+    // Setup render states with obvious changes when enabled
+    device->SetRenderState(D3DRS_LIGHTING, FALSE);
+    device->SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW);
+    device->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
 
-    // Setup texture stages
-    SetupTextureStages(device, material);
+    // For testing: Make obvious visual changes when enabled
+    if (enabled) {
+        // Force wireframe rendering
+        device->SetRenderState(D3DRS_FILLMODE, D3DFILL_WIREFRAME);
+        
+        // Or force a specific color
+        device->SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_ARGB(255, 255, 0, 0));  // Bright red
+        device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+        device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TFACTOR);
+    } else {
+        device->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
+    }
 
-    FF_LOG("Fixed function pipeline configured for material: %s", material->GetName());
+    // Setup alpha blending based on material properties
+    bool isTranslucent = material->IsTranslucent();
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, isTranslucent ? TRUE : FALSE);
+    if (isTranslucent) {
+        device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+        device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    }
+
+    FF_LOG("Fixed function pipeline configured for material: %s (enabled: %d)", 
+        material->GetName(), enabled);
 }
 
 DWORD FixedFunctionState::GetFVFFromSourceFormat(VertexFormat_t format) {

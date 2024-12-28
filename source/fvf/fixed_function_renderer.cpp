@@ -88,8 +88,8 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
         // Store current state
         m_stateManager->Store(device);
 
-        // Setup fixed function pipeline
-        m_stateManager->SetupFixedFunction(device, format, material);
+        // Setup fixed function pipeline with obviously different state
+        m_stateManager->SetupFixedFunction(device, format, material, m_enabled);
 
         // Render
         HRESULT hr = device->DrawIndexedPrimitive(
@@ -122,8 +122,15 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     UINT StartIndex,
     UINT PrimitiveCount)
 {
-    auto& instance = Instance();  // Get instance first
+    auto& instance = Instance();
     instance.m_stats.totalDrawCalls++;
+
+    // If fixed function is disabled, use original path
+    if (!instance.m_enabled) {
+        return instance.m_originalDrawIndexedPrimitive(
+            device, PrimitiveType, BaseVertexIndex,
+            MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
+    }
 
     // Get current material
     IMaterial* material = materials->GetRenderContext()->GetCurrentMaterial();
@@ -133,12 +140,6 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
             MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
     }
 
-    // For testing: Use a basic vertex format that should work with most geometry
-    VertexFormat_t format = 
-        FF_VERTEX_POSITION | 
-        FF_VERTEX_NORMAL | 
-        FF_VERTEX_TEXCOORD0;
-    
     static float lastMaterialLog = 0.0f;
     float currentTime = Plat_FloatTime();
 
@@ -148,13 +149,19 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
         FF_LOG("  Material: %s", material->GetName());
         FF_LOG("  Shader: %s", material->GetShaderName());
         FF_LOG("  Vertices: %d, Primitives: %d", NumVertices, PrimitiveCount);
-        FF_LOG("  Using test format: Position + Normal + TexCoord");
+        FF_LOG("  Fixed Function: %s", instance.m_enabled ? "enabled" : "disabled");
         lastMaterialLog = currentTime;
     }
 
     // Check if we should use fixed function
     if (MaterialUtil::ShouldUseFixedFunction(material)) {
         instance.m_stats.fixedFunctionDrawCalls++;
+
+        // For testing: Use a basic vertex format that should work with most geometry
+        VertexFormat_t format = 
+            FF_VERTEX_POSITION | 
+            FF_VERTEX_NORMAL | 
+            FF_VERTEX_TEXCOORD0;
 
         bool success = instance.RenderWithFixedFunction(
             device, material, format,
@@ -166,7 +173,6 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
             return D3D_OK;
         }
         
-        // Fall through to original path if fixed function failed
         FF_WARN("Fixed function render failed, using original path");
     }
 

@@ -21,14 +21,19 @@ namespace MaterialUtil {
 
         // Start with basic shader checks - add logging for testing
         bool shouldUse = (strstr(shaderName, "VertexLitGeneric") ||
-                         strstr(shaderName, "LightmappedGeneric"));
-                         
-        if (shouldUse) {
-            Msg("[Material Util] Will use fixed function for %s\n", materialName);
-        }
+                            strstr(shaderName, "LightmappedGeneric") ||
+                            strstr(shaderName, "UnlitGeneric") ||
+                            strstr(shaderName, "Sprite") ||
+                            strstr(shaderName, "Cable") ||
+                            strstr(shaderName, "Sky"));
+                            
+            if (shouldUse) {
+                Msg("[Material Util] Will use fixed function for %s (shader: %s)\n", 
+                    materialName, shaderName);
+            }
 
-        return shouldUse;
-    }
+            return shouldUse;
+        }
 
     bool IsWorldMaterial(IMaterial* material) {
         if (!material) return false;

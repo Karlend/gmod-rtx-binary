@@ -17,9 +17,11 @@ public:
 
     void Store(IDirect3DDevice9* device);
     void Restore(IDirect3DDevice9* device);
-    void SetupFixedFunction(IDirect3DDevice9* device, 
+    void SetupFixedFunction(
+        IDirect3DDevice9* device, 
         VertexFormat_t sourceFormat, 
-        IMaterial* material);
+        IMaterial* material,
+        bool enabled);  // Add enabled parameter
 
 private:
     struct TextureStageState {
