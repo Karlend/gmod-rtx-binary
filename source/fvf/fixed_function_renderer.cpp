@@ -13,6 +13,26 @@ static IMaterialSystem* g_pMaterialSystem = nullptr;
 FixedFunctionRenderer::DrawIndexedPrimitive_t FixedFunctionRenderer::s_originalDrawIndexedPrimitive = nullptr;
 Detouring::Hook FixedFunctionRenderer::s_drawHook;
 
+void FixedFunctionRenderer::SetEnabled(bool enable) {
+    m_enabled = enable;
+    FF_LOG("Renderer %s", enable ? "enabled" : "disabled");
+    
+    if (enable && !m_stateManager) {
+        FF_LOG("State manager missing, attempting to create...");
+        try {
+            m_stateManager = std::make_unique<FixedFunctionState>();
+            if (m_stateManager) {
+                FF_LOG("State manager created successfully during enable");
+            } else {
+                FF_WARN("Failed to create state manager during enable");
+            }
+        }
+        catch (const std::exception& e) {
+            FF_WARN("Exception creating state manager during enable: %s", e.what());
+        }
+    }
+}
+
 void RenderStats::Reset() {
     totalDrawCalls = 0;
     fixedFunctionDrawCalls = 0;
@@ -58,6 +78,21 @@ void FixedFunctionRenderer::Initialize(IDirect3DDevice9* device) {
     FF_LOG("Initializing with device: %p", device);
     m_device = device;
     m_stats.Reset();
+
+    // Create state manager first
+    try {
+        FF_LOG("Creating state manager...");
+        m_stateManager = std::make_unique<FixedFunctionState>();
+        if (!m_stateManager) {
+            FF_WARN("Failed to create state manager");
+            return;
+        }
+        FF_LOG("State manager created successfully");
+    }
+    catch (const std::exception& e) {
+        FF_WARN("Exception creating state manager: %s", e.what());
+        return;
+    }
     
     try {
         // Get vtable with error checking
@@ -182,8 +217,19 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
     FF_LOG(">>> RenderWithFixedFunction Called <<<");
 
     if (!m_stateManager) {
-        FF_WARN("No state manager available");
-        return false;
+        FF_WARN("No state manager available - reinitializing...");
+        try {
+            m_stateManager = std::make_unique<FixedFunctionState>();
+            if (!m_stateManager) {
+                FF_WARN("Failed to create state manager during recovery");
+                return false;
+            }
+            FF_LOG("State manager recreated successfully");
+        }
+        catch (const std::exception& e) {
+            FF_WARN("Exception creating state manager during recovery: %s", e.what());
+            return false;
+        }
     }
 
     try {
@@ -211,7 +257,9 @@ bool FixedFunctionRenderer::RenderWithFixedFunction(
     }
     catch (const std::exception& e) {
         FF_WARN("Exception in RenderWithFixedFunction: %s", e.what());
-        m_stateManager->Restore(device);
+        if (m_stateManager) {
+            m_stateManager->Restore(device);
+        }
         return false;
     }
 }
@@ -225,94 +273,129 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     UINT StartIndex,
     UINT PrimitiveCount)
 {
+    static int recursionDepth = 0;
+    if (recursionDepth > 0) {
+        // Prevent recursive calls
+        return s_originalDrawIndexedPrimitive(
+            device, PrimitiveType, BaseVertexIndex,
+            MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
+    }
+    
+    recursionDepth++;
     auto& instance = Instance();
-    
-    // Ensure materials interface is available
-    if (!materials || !g_pMaterialSystem) {
-        FF_LOG("MaterialSystem not available, using original path");
-        return s_originalDrawIndexedPrimitive(
-            device, PrimitiveType, BaseVertexIndex,
-            MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
-    }
+    HRESULT result = D3D_OK;
 
-    static bool first_call = true;
-    if (first_call) {
-        FF_LOG("First draw call intercepted!");
-        FF_LOG("Device: %p", device);
-        FF_LOG("MaterialSystem: %p", materials);
-        first_call = false;
-    }
+    try {
+        // Ensure materials interface is available
+        if (!materials || !g_pMaterialSystem) {
+            FF_LOG("MaterialSystem not available, using original path");
+            result = s_originalDrawIndexedPrimitive(
+                device, PrimitiveType, BaseVertexIndex,
+                MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
+            recursionDepth--;
+            return result;
+        }
 
-    if (!s_originalDrawIndexedPrimitive) {
-        FF_WARN("No original function available!");
-        return D3D_OK;
-    }
+        static bool first_call = true;
+        if (first_call) {
+            FF_LOG("First draw call intercepted!");
+            FF_LOG("Device: %p", device);
+            FF_LOG("MaterialSystem: %p", materials);
+            first_call = false;
+        }
 
-    static float lastDebugTime = 0.0f;
-    float currentTime = Plat_FloatTime();
-    
-    // Debug Print #1 - Hook Interception
-    if (currentTime - lastDebugTime > 1.0f) {
-        FF_LOG(">>> Draw Hook Called <<<");
-        FF_LOG("Fixed Function Enabled: %s", instance.m_enabled ? "YES" : "NO");
-        FF_LOG("Primitive Count: %d, Vertices: %d", PrimitiveCount, NumVertices);
-        lastDebugTime = currentTime;
-    }
-
-    instance.m_stats.totalDrawCalls++;
-
-    // If fixed function is disabled, use original path
-    if (!instance.m_enabled) {
-        FF_LOG("Fixed Function disabled, using original path");
-        return s_originalDrawIndexedPrimitive(
-            device, PrimitiveType, BaseVertexIndex,
-            MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
-    }
-
-    // Get current material
-    IMaterial* material = materials->GetRenderContext()->GetCurrentMaterial();
-    if (!material) {
-        FF_LOG("No material found, using original path");
-        return s_originalDrawIndexedPrimitive(
-            device, PrimitiveType, BaseVertexIndex,
-            MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
-    }
-
-    // Debug Print #2 - Material Info
-    if (currentTime - lastDebugTime > 1.0f) {
-        FF_LOG("Material: %s", material->GetName());
-        FF_LOG("Shader: %s", material->GetShaderName());
-    }
-
-    // Check if we should use fixed function
-    if (MaterialUtil::ShouldUseFixedFunction(material)) {
-        FF_LOG(">>> Using Fixed Function Path <<<");
-        instance.m_stats.fixedFunctionDrawCalls++;
-
-        VertexFormat_t format = 
-            FF_VERTEX_POSITION | 
-            FF_VERTEX_NORMAL | 
-            FF_VERTEX_TEXCOORD0;
-
-        bool success = instance.RenderWithFixedFunction(
-            device, material, format,
-            PrimitiveType, BaseVertexIndex,
-            MinVertexIndex, NumVertices,
-            StartIndex, PrimitiveCount);
-
-        if (success) {
-            FF_LOG("Fixed Function render successful");
+        if (!s_originalDrawIndexedPrimitive) {
+            FF_WARN("No original function available!");
+            recursionDepth--;
             return D3D_OK;
         }
+
+        static float lastDebugTime = 0.0f;
+        float currentTime = Plat_FloatTime();
         
-        FF_WARN("Fixed function render failed, using original path");
+        // Debug Print #1 - Hook Interception
+        if (currentTime - lastDebugTime > 1.0f) {
+            FF_LOG(">>> Draw Hook Called <<<");
+            FF_LOG("Fixed Function Enabled: %s", instance.m_enabled ? "YES" : "NO");
+            FF_LOG("Primitive Count: %d, Vertices: %d", PrimitiveCount, NumVertices);
+            lastDebugTime = currentTime;
+        }
+
+        instance.m_stats.totalDrawCalls++;
+
+        // If fixed function is disabled, use original path
+        if (!instance.m_enabled) {
+            FF_LOG("Fixed Function disabled, using original path");
+            result = s_originalDrawIndexedPrimitive(
+                device, PrimitiveType, BaseVertexIndex,
+                MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
+            recursionDepth--;
+            return result;
+        }
+
+        // Get current material
+        IMaterial* material = materials->GetRenderContext()->GetCurrentMaterial();
+        if (!material) {
+            FF_LOG("No material found, using original path");
+            result = s_originalDrawIndexedPrimitive(
+                device, PrimitiveType, BaseVertexIndex,
+                MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
+            recursionDepth--;
+            return result;
+        }
+
+        // Debug Print #2 - Material Info
+        if (currentTime - lastDebugTime > 1.0f) {
+            FF_LOG("Material: %s", material->GetName());
+            FF_LOG("Shader: %s", material->GetShaderName());
+        }
+
+        // Check if we should use fixed function
+        if (MaterialUtil::ShouldUseFixedFunction(material)) {
+            FF_LOG(">>> Using Fixed Function Path <<<");
+            instance.m_stats.fixedFunctionDrawCalls++;
+
+            VertexFormat_t format = 
+                FF_VERTEX_POSITION | 
+                FF_VERTEX_NORMAL | 
+                FF_VERTEX_TEXCOORD0;
+
+            bool success = instance.RenderWithFixedFunction(
+                device, material, format,
+                PrimitiveType, BaseVertexIndex,
+                MinVertexIndex, NumVertices,
+                StartIndex, PrimitiveCount);
+
+            if (success) {
+                FF_LOG("Fixed Function render successful");
+                recursionDepth--;
+                return D3D_OK;
+            }
+            
+            FF_WARN("Fixed function render failed, using original path");
+        }
+
+        // Update and log stats
+        instance.m_stats.LogIfNeeded();
+
+        FF_LOG("Using original render path");
+        result = s_originalDrawIndexedPrimitive(
+            device, PrimitiveType, BaseVertexIndex,
+            MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
+    }
+    catch (const std::exception& e) {
+        FF_WARN("Exception in DrawIndexedPrimitive_Detour: %s", e.what());
+        result = s_originalDrawIndexedPrimitive(
+            device, PrimitiveType, BaseVertexIndex,
+            MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
+    }
+    catch (...) {
+        FF_WARN("Unknown exception in DrawIndexedPrimitive_Detour");
+        result = s_originalDrawIndexedPrimitive(
+            device, PrimitiveType, BaseVertexIndex,
+            MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
     }
 
-    // Update and log stats
-    instance.m_stats.LogIfNeeded();
-
-    FF_LOG("Using original render path");
-    return s_originalDrawIndexedPrimitive(
-        device, PrimitiveType, BaseVertexIndex,
-        MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
+    recursionDepth--;
+    return result;
 }

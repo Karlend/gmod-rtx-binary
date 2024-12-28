@@ -3,6 +3,11 @@
 #include <tier0/dbg.h>
 #include "ff_logging.h"
 
+FixedFunctionState::FixedFunctionState() {
+    FF_LOG("Creating FixedFunctionState instance");
+    m_isStored = false;
+}
+
 FixedFunctionState::~FixedFunctionState() {
     if (m_state.vertexShader) m_state.vertexShader->Release();
     if (m_state.pixelShader) m_state.pixelShader->Release();

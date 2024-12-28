@@ -27,11 +27,7 @@ public:
     
     void Initialize(IDirect3DDevice9* device);
     void Shutdown();
-
-    void SetEnabled(bool enable) {
-        m_enabled = enable;
-        FF_LOG("Renderer %s", enable ? "enabled" : "disabled");
-    }
+    void SetEnabled(bool enable);
 
 private:
     IDirect3DDevice9* m_device = nullptr;

@@ -12,7 +12,7 @@ extern IMaterialSystem* materials;
 
 class FixedFunctionState {
 public:
-    FixedFunctionState() = default;
+    FixedFunctionState();
     ~FixedFunctionState();
 
     void Store(IDirect3DDevice9* device);
