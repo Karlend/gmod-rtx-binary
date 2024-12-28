@@ -1,9 +1,7 @@
 // fixed_function_state.cpp
 #include "fixed_function_state.h"
 #include <tier0/dbg.h>
-
-#define FF_LOG(fmt, ...) Msg("[FF State] " fmt "\n", ##__VA_ARGS__)
-#define FF_WARN(fmt, ...) Warning("[FF State] " fmt "\n", ##__VA_ARGS__)
+#include "ff_logging.h"
 
 FixedFunctionState::~FixedFunctionState() {
     if (m_state.vertexShader) m_state.vertexShader->Release();

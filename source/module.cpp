@@ -12,6 +12,7 @@
 #include "rtx_lights/rtx_light_manager.h"
 #include "shader_fixes/shader_hooks.h"
 #include "fvf/fixed_function_renderer.h"
+#include "fvf/ff_logging.h"
 
 #ifdef GMOD_MAIN
 extern IMaterialSystem* materials = NULL;
@@ -50,14 +51,15 @@ LUA_FUNCTION(FF_Enable) {
         }
 
         bool enable = LUA->GetBool(1);
-        Msg("[Fixed Function] Enable called with value: %d\n", enable);
+        FF_LOG(">>> Enable called with value: %d <<<", enable);
+        FF_LOG("Testing debug output...");
         
         // Directly control the renderer
         FixedFunctionRenderer::Instance().SetEnabled(enable);
         return 0;
     }
     catch (...) {
-        Warning("[Fixed Function] Exception in Enable function\n");
+        FF_WARN("Exception in Enable function");
         return 0;
     }
 }
@@ -245,6 +247,12 @@ GMOD_MODULE_OPEN() {
             Error("[RTX FVF] Failed to find D3D9 device\n");
             return 1;
         }
+        Msg("[RTX FVF] Found D3D9 device: %p\n", sourceDevice);
+
+        // Test vtable
+        void** vftable = *reinterpret_cast<void***>(sourceDevice);
+        Msg("[RTX FVF] Device vtable: %p\n", vftable);
+        Msg("[RTX FVF] DrawIndexedPrimitive address: %p\n", vftable[82]);
 
         // Initialize renderer
         FixedFunctionRenderer::Instance().Initialize(sourceDevice);

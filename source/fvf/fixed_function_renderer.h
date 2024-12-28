@@ -5,9 +5,7 @@
 #include "materialsystem/imaterial.h"
 #include "vertex_format.h"
 #include "detouring/hook.hpp"
-
-#define FF_LOG(fmt, ...) Msg("[Fixed Function] " fmt "\n", ##__VA_ARGS__)
-#define FF_WARN(fmt, ...) Warning("[Fixed Function] " fmt "\n", ##__VA_ARGS__)
+#include "ff_logging.h"
 
 
 // Forward declare

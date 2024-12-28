@@ -1,4 +1,5 @@
 #include "material_util.h"
+#include "ff_logging.h"
 
 namespace MaterialUtil {
     bool MaterialUtil::ShouldUseFixedFunction(IMaterial* material) {

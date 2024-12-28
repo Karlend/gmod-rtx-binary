@@ -3,6 +3,7 @@
 #include "vertex_format.h"
 #include "material_util.h"
 #include <tier0/dbg.h>
+#include "ff_logging.h"
 
 void RenderStats::Reset() {
     totalDrawCalls = 0;
@@ -32,21 +33,37 @@ void FixedFunctionRenderer::Initialize(IDirect3DDevice9* device) {
         return;
     }
 
+    FF_LOG("Initializing with device: %p", device);
     m_device = device;
     m_stats.Reset();
     
     // Get D3D9 vtable and hook DrawIndexedPrimitive
     void** vftable = *reinterpret_cast<void***>(device);
+    if (!vftable) {
+        FF_WARN("Failed to get vtable");
+        return;
+    }
+    
+    FF_LOG("Got vtable: %p", vftable);
+    FF_LOG("DrawIndexedPrimitive offset: %p", &vftable[82]);
     
     try {
         // Hook DrawIndexedPrimitive
         Detouring::Hook::Target target(&vftable[82]);
+        FF_LOG("Created hook target");
+        
         m_drawHook.Create(target, DrawIndexedPrimitive_Detour);
+        FF_LOG("Created hook");
+        
         m_originalDrawIndexedPrimitive = m_drawHook.GetTrampoline<DrawIndexedPrimitive_t>();
+        FF_LOG("Got trampoline: %p", m_originalDrawIndexedPrimitive);
+        
         m_drawHook.Enable();
+        FF_LOG("Hook enabled");
         
         // Create state manager
         m_stateManager = std::make_unique<FixedFunctionState>();
+        FF_LOG("State manager created");
         
         FF_LOG("Successfully initialized fixed function renderer");
     }
@@ -125,9 +142,22 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     UINT StartIndex,
     UINT PrimitiveCount)
 {
+    static bool first_call = true;
+    if (first_call) {
+        Msg("[HOOK TEST] Draw hook called!\n");  // Use Msg directly for this test
+        FF_LOG("[HOOK TEST] Using FF_LOG");
+        OutputDebugStringA("[HOOK TEST] Draw hook called (OutputDebugString)\n");
+        first_call = false;
+    }
+
+    auto& instance = Instance();
+    if (!instance.m_originalDrawIndexedPrimitive) {
+        FF_WARN("No original function!");
+        return D3D_OK;
+    }
+
     static float lastDebugTime = 0.0f;
     float currentTime = Plat_FloatTime();
-    auto& instance = Instance();
     
     // Debug Print #1 - Hook Interception
     if (currentTime - lastDebugTime > 1.0f) {
