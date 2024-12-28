@@ -1,34 +1,34 @@
-if SERVER then return end
+if not CLIENT then return end
 
--- ConVars are created by the module
-CreateClientConVar("rtx_ff_debug_hud", "1", true, false, "Show fixed function debug HUD")
+local function InitializeFixedFunction()
+    local FF = _G.FixedFunction
+    if not FF then
+        Error("[Fixed Function] Module not loaded properly! Retrying in 1 second...\n")
+        timer.Simple(1, InitializeFixedFunction)
+        return
+    end
 
-local function CreateDebugHUD()
-    if not GetConVar("rtx_ff_debug_hud"):GetBool() then return end
-    
-    -- Get stats from module
-    local stats = FixedFunction.GetStats()
-    if not stats then return end
-    
-    -- Draw debug info
-    local text = string.format(
-        "Fixed Function Pipeline:\nTotal Draws: %d\nFF Draws: %d",
-        stats.total_draws or 0,
-        stats.ff_draws or 0
-    )
-    
-    draw.SimpleText(text, "Default", 10, 10, color_white)
+    -- Create ConVars
+    CreateClientConVar("rtx_ff_debug_hud", "1", true, false, "Show fixed function debug HUD")
+
+    -- Add commands
+    concommand.Add("ff_toggle", function()
+        if not FF.Enable then 
+            Error("[Fixed Function] Module interface not available!\n")
+            return
+        end
+        
+        local current = GetConVar("rtx_ff_enable"):GetBool()
+        Msg(string.format("[Fixed Function] Toggling state from %s to %s\n", 
+            current and "on" or "off",
+            (not current) and "on" or "off"))
+        
+        FF.Enable(not current)
+    end)
+
+    Msg(string.format("[Fixed Function] Module v%s loaded successfully\n", FF.Version))
+    Msg("[Fixed Function] Use ff_toggle to toggle fixed function pipeline\n")
 end
-hook.Add("HUDPaint", "FixedFunctionDebug", CreateDebugHUD)
 
--- Console commands
-concommand.Add("ff_toggle", function()
-    local current = GetConVar("rtx_ff_enable"):GetBool()
-    FixedFunction.Enable(not current)
-end)
-
--- Print info when loaded
-hook.Add("InitPostEntity", "FixedFunctionInit", function()
-    print("Fixed Function Pipeline v" .. FixedFunction.Version .. " loaded")
-    print("Use ff_toggle to toggle fixed function pipeline")
-end)
+-- Start initialization
+hook.Add("Initialize", "FixedFunctionInit", InitializeFixedFunction)

@@ -19,7 +19,7 @@ extern IMaterialSystem* materials = NULL;
 // extern IShaderAPI* g_pShaderAPI = NULL;
 remix::Interface* g_remix = nullptr;
 
-static ConVar rtx_ff_enable("rtx_ff_enable", "1", FCVAR_ARCHIVE, "Enable fixed function pipeline");
+static ConVar rtx_ff_enable("rtx_ff_enable", "0", FCVAR_ARCHIVE, "Enable fixed function pipeline");
 static ConVar rtx_ff_debug("rtx_ff_debug", "0", FCVAR_ARCHIVE, "Enable extra debug output for fixed function pipeline");
 
 // ConVar callback
@@ -212,52 +212,94 @@ void* FindD3D9Device() {
 
 GMOD_MODULE_OPEN() {
     try {
-        // Find D3D device (keep existing code)
+        Msg("[RTX FVF] Starting module initialization...\n");
+
+        // Find D3D device
         auto sourceDevice = static_cast<IDirect3DDevice9Ex*>(FindD3D9Device());
         if (!sourceDevice) {
-            LUA->ThrowError("[RTX] Failed to find D3D9 device");
-            return 0;
+            Error("[RTX FVF] Failed to find D3D9 device\n");
+            return 1; // Return error
         }
+        Msg("[RTX FVF] Found D3D9 device: %p\n", sourceDevice);
 
         // Initialize fixed function renderer
-        FixedFunctionRenderer::Instance().Initialize(sourceDevice);
+        try {
+            FixedFunctionRenderer::Instance().Initialize(sourceDevice);
+            Msg("[RTX FVF] Fixed function renderer initialized\n");
+        }
+        catch (const std::exception& e) {
+            Error("[RTX FVF] Failed to initialize renderer: %s\n", e.what());
+            return 1;
+        }
 
-        // Setup ConVar callback
-        rtx_ff_enable.InstallChangeCallback(FF_EnableChanged);
+        // Setup Lua interface
+        try {
+            // Create Lua interface
+            Msg("[RTX FVF] Setting up Lua interface...\n");
+            
+            LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
+            
+            // Create FF table
+            LUA->CreateTable();
+            
+            // Add Enable function
+            LUA->PushCFunction(FF_Enable);
+            LUA->SetField(-2, "Enable");
+            
+            // Add version info
+            LUA->PushString("1.0");
+            LUA->SetField(-2, "Version");
+            
+            // Set the table in _G
+            LUA->SetField(-2, "FixedFunction");
+            
+            // Pop global table
+            LUA->Pop();
+            
+            Msg("[RTX FVF] Lua interface setup complete\n");
+        }
+        catch (const std::exception& e) {
+            Error("[RTX FVF] Failed to setup Lua interface: %s\n", e.what());
+            return 1;
+        }
 
-        // Create Lua interface
-        LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
+        // Register ConVars
+        try {
+            static ConVar rtx_ff_enable("rtx_ff_enable", "1", FCVAR_ARCHIVE, "Enable fixed function pipeline", true, 0, true, 1);
+            rtx_ff_enable.InstallChangeCallback(FF_EnableChanged);
+            Msg("[RTX FVF] ConVars registered\n");
+        }
+        catch (const std::exception& e) {
+            Error("[RTX FVF] Failed to register ConVars: %s\n", e.what());
+            return 1;
+        }
 
-        // Create FF table
-        LUA->CreateTable();
-
-        // Add functions
-        LUA->PushCFunction(FF_Enable);
-        LUA->SetField(-2, "Enable");
-
-        LUA->PushCFunction(FF_GetStats);
-        LUA->SetField(-2, "GetStats");
-
-        // Add version info
-        LUA->PushString("1.0");
-        LUA->SetField(-2, "Version");
-
-        // Set the table in _G
-        LUA->SetField(-2, "FixedFunction");
-
-        // Pop global table
-        LUA->Pop();
-
-        Msg("[Fixed Function] Module loaded successfully\n");
+        Msg("[RTX FVF] Module initialized successfully\n");
         return 0;
     }
     catch (const std::exception& e) {
-        Error("[Fixed Function] Failed to load module: %s\n", e.what());
-        return 0;
+        Error("[RTX FVF] Unhandled exception during initialization: %s\n", e.what());
+        return 1;
+    }
+    catch (...) {
+        Error("[RTX FVF] Unknown error during initialization\n");
+        return 1;
     }
 }
 
 GMOD_MODULE_CLOSE() {
-    FixedFunctionRenderer::Instance().Shutdown();
-    return 0;
+    try {
+        Msg("[RTX FVF] Shutting down...\n");
+        FixedFunctionRenderer::Instance().Shutdown();
+        Msg("[RTX FVF] Shutdown complete\n");
+        return 0;
+    }
+    catch (const std::exception& e) {
+        Error("[RTX FVF] Error during shutdown: %s\n", e.what());
+        return 1;
+    }
+    catch (...) {
+        Error("[RTX FVF] Unknown error during shutdown\n");
+        return 1;
+    }
 }
