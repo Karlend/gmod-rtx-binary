@@ -3,6 +3,10 @@
 #include <d3dx9.h>
 #include "materialsystem/imaterialsystem.h"
 #include "materialsystem/imaterial.h"
+#include "materialsystem/imaterialvar.h"
+#include "materialsystem/itexture.h"
+#include "mathlib/vector.h"
+#include "mathlib/vector4d.h"
 #include "vertex_format.h"
 #include <vector>
 

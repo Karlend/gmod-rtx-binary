@@ -94,9 +94,15 @@ void FixedFunctionState::SetupFixedFunction(
     IMaterial* material,
     bool enabled)
 {
-    FF_LOG(">>> SetupFixedFunction Called <<<");
-    FF_LOG("Material: %s", material ? material->GetName() : "null");
-    FF_LOG("Enabled: %s", enabled ? "YES" : "NO");
+    static float lastLogTime = 0.0f;
+    float currentTime = Plat_FloatTime();
+    bool shouldLog = (currentTime - lastLogTime > 1.0f);
+    
+    if (shouldLog) {
+        FF_LOG(">>> SetupFixedFunction Called <<<");
+        FF_LOG("Material: %s", material ? material->GetName() : "null");
+        lastLogTime = currentTime;
+    }
 
     if (!device || !material) {
         FF_WARN("Invalid device or material");
@@ -104,38 +110,77 @@ void FixedFunctionState::SetupFixedFunction(
     }
 
     try {
-        FF_LOG("Disabling shaders");
+        // Disable shaders
         device->SetVertexShader(nullptr);
         device->SetPixelShader(nullptr);
 
-        FF_LOG("Setting FVF format");
+        // Setup vertex format
         DWORD fvf = GetFVFFromSourceFormat(sourceFormat);
         device->SetFVF(fvf);
 
-        FF_LOG("Setting up transforms");
+        // Setup transforms
         SetupTransforms(device, material);
 
-        FF_LOG("Setting render states");
-        // Force obvious visual changes
-        HRESULT hr;
-        
-        hr = device->SetRenderState(D3DRS_FILLMODE, D3DFILL_WIREFRAME);
-        FF_LOG("Set wireframe mode: %s", SUCCEEDED(hr) ? "SUCCESS" : "FAILED");
+        // Setup render states for proper rendering
+        device->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
+        device->SetRenderState(D3DRS_LIGHTING, TRUE);
+        device->SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW);
+        device->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
 
-        hr = device->SetRenderState(D3DRS_LIGHTING, FALSE);
-        FF_LOG("Disable lighting: %s", SUCCEEDED(hr) ? "SUCCESS" : "FAILED");
+        // Set material color - using Source's material system
+        float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };  // Default white
+        IMaterialVar* colorVar = material->FindVar("$color", nullptr);
+        if (colorVar && !colorVar->IsDefined()) {  // Changed from IsEmpty
+            Vector4D col;
+            colorVar->GetVecValue(&col.x, 4);  // Get color as Vector4D
+            color[0] = col.x;
+            color[1] = col.y;
+            color[2] = col.z;
+            color[3] = col.w;
+        }
 
-        // Force bright red color
-        hr = device->SetRenderState(D3DRS_TEXTUREFACTOR, D3DCOLOR_ARGB(255, 255, 0, 0));
-        FF_LOG("Set color override: %s", SUCCEEDED(hr) ? "SUCCESS" : "FAILED");
+        // Set material properties
+        D3DMATERIAL9 mtrl;
+        ZeroMemory(&mtrl, sizeof(mtrl));
+        mtrl.Diffuse.r = color[0];
+        mtrl.Diffuse.g = color[1];
+        mtrl.Diffuse.b = color[2];
+        mtrl.Diffuse.a = color[3];
+        mtrl.Ambient = mtrl.Diffuse;
+        device->SetMaterial(&mtrl);
 
-        hr = device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
-        FF_LOG("Set color op: %s", SUCCEEDED(hr) ? "SUCCESS" : "FAILED");
+        // Setup texture
+        IMaterialVar* baseTexture = material->FindVar("$basetexture", nullptr);
+        if (baseTexture && !baseTexture->IsDefined()) {
+            // Get texture handle directly from material var
+            void* texHandle = baseTexture->GetTextureValue();
+            if (texHandle) {
+                IDirect3DBaseTexture9* d3dtex = static_cast<IDirect3DBaseTexture9*>(texHandle);
+                if (d3dtex) {
+                    device->SetTexture(0, d3dtex);
+                    
+                    // Basic texture stage states
+                    device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+                    device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+                    device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+                    device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+                    device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+                    device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+                }
+            }
+        }
 
-        hr = device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TFACTOR);
-        FF_LOG("Set color arg: %s", SUCCEEDED(hr) ? "SUCCESS" : "FAILED");
+        // Setup alpha blending
+        bool isTranslucent = material->IsTranslucent();
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, isTranslucent ? TRUE : FALSE);
+        if (isTranslucent) {
+            device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+            device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+        }
 
-        FF_LOG("Fixed function pipeline setup complete");
+        if (shouldLog) {
+            FF_LOG("Fixed function pipeline setup complete");
+        }
     }
     catch (const std::exception& e) {
         FF_WARN("Exception in SetupFixedFunction: %s", e.what());

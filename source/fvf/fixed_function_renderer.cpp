@@ -313,11 +313,13 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
         static float lastDebugTime = 0.0f;
         float currentTime = Plat_FloatTime();
         
-        // Debug Print #1 - Hook Interception
-        if (currentTime - lastDebugTime > 1.0f) {
-            FF_LOG(">>> Draw Hook Called <<<");
-            FF_LOG("Fixed Function Enabled: %s", instance.m_enabled ? "YES" : "NO");
-            FF_LOG("Primitive Count: %d, Vertices: %d", PrimitiveCount, NumVertices);
+        // Debug Print - Hook Interception
+        if (currentTime - lastDebugTime > 5.0f) {
+            IMaterial* currentMat = materials->GetRenderContext()->GetCurrentMaterial();
+            FF_LOG("Draw stats for last 5 seconds:");
+            FF_LOG("  Total draws: %d", instance.m_stats.totalDrawCalls);
+            FF_LOG("  FF draws: %d", instance.m_stats.fixedFunctionDrawCalls);
+            FF_LOG("  Current material: %s", currentMat ? currentMat->GetName() : "null");
             lastDebugTime = currentTime;
         }
 
