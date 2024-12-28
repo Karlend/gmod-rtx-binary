@@ -4,23 +4,32 @@
 #include <Windows.h>
 #include <dbghelp.h>
 #pragma comment(lib, "dbghelp.lib")
+#include "render_mode_manager.h" 
+
+IDirect3DVertexDeclaration9* decl = nullptr;
+
 
 void RenderStateLogger::Initialize(IDirect3DDevice9* device) {
     std::lock_guard<std::mutex> lock(m_mutex);
     
-    if (m_initialized) return;
+    if (m_initialized) {
+        Msg("[Render Logger] Already initialized\n");
+        return;
+    }
+
+    if (!device) {
+        Msg("[Render Logger] Null device in Initialize\n");
+        return;
+    }
 
     m_device = device;
     m_initialized = true;
-    m_loggingEnabled = true;
+    m_loggingEnabled = false;  // Start disabled
     m_lastLogTime = 0.0f;
-    m_logInterval = 0.016f;  // Default to ~60fps
+    m_logInterval = 0.016f;
     m_logEntries.reserve(1000);
 
-    // Initialize debug symbols
-    SymInitialize(GetCurrentProcess(), NULL, TRUE);
-
-    LogMessage("Render logger initialized with %f second interval\n", m_logInterval);
+    Msg("[Render Logger] Successfully initialized with device %p\n", device);
 }
 
 void RenderStateLogger::Shutdown() {
@@ -130,13 +139,13 @@ void RenderStateLogger::LogDrawCall(IDirect3DDevice9* device, D3DPRIMITIVETYPE p
     static float s_lastDebugTime = 0.0f;
     float currentTime = GetTickCount64() / 1000.0f;
 
-    Msg("[Render Logger] LogDrawCall called - Initialized: %d, Enabled: %d, Device: %p\n",
-        m_initialized, m_loggingEnabled, m_device);
+    Msg("[Render Logger] LogDrawCall - Context: %s, Prims: %d\n", 
+        context ? context : "Unknown", primCount);
 
     if (!ShouldLog()) {
         if (currentTime - s_lastDebugTime > 1.0f) {
-            Msg("[Render Logger] Skipping log - Time since last: %f, Interval: %f\n",
-                currentTime - m_lastLogTime, m_logInterval);
+            Msg("[Render Logger] Skipping log - Initialized: %d, Enabled: %d, Device: %p\n",
+                m_initialized, m_loggingEnabled, m_device);
             s_lastDebugTime = currentTime;
         }
         return;

@@ -242,7 +242,10 @@ GMOD_MODULE_OPEN() {
             return 0;
         }
 
-        // Initialize Render Mode Manager first
+        // Initialize RenderStateLogger first
+        RenderStateLogger::Instance().Initialize(sourceDevice);
+
+        // Then initialize RenderModeManager
         RenderModeManager::Instance().Initialize(sourceDevice);
         RenderModeManager::Instance().EnableFVFForWorld(true);
         RenderModeManager::Instance().EnableFVFForModels(true);

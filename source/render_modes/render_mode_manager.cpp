@@ -1,4 +1,5 @@
 #include "render_mode_manager.h"
+#include "render_state_logger.h"
 #include <tier0/dbg.h>
 #include "e_utils.h"
 
@@ -7,6 +8,9 @@ extern IMaterialSystem* materials;
 HRESULT WINAPI SetFVF_Detour(IDirect3DDevice9* device, DWORD FVF) {
     static float s_lastDebugTime = 0.0f;
     float currentTime = GetTickCount64() / 1000.0f;
+
+    // Log the FVF state
+    RenderStateLogger::Instance().LogVertexFormat(FVF, "SetFVF");
 
     if (currentTime - s_lastDebugTime > 1.0f) {
         Msg("[RTX FVF] SetFVF called with FVF: 0x%x\n", FVF);
@@ -26,6 +30,51 @@ HRESULT WINAPI SetFVF_Detour(IDirect3DDevice9* device, DWORD FVF) {
     }
     
     return manager.m_originalSetFVF(device, FVF);
+}
+
+// Add DrawPrimitive hook
+HRESULT WINAPI DrawPrimitive_Detour(IDirect3DDevice9* device,
+    D3DPRIMITIVETYPE PrimitiveType,
+    UINT StartVertex,
+    UINT PrimitiveCount) {
+    
+    auto& manager = RenderModeManager::Instance();
+    
+    // Log the draw call
+    RenderStateLogger::Instance().LogDrawCall(
+        device, 
+        PrimitiveType,
+        StartVertex,
+        PrimitiveCount,
+        "DrawPrimitive");
+
+    return manager.m_originalDrawPrimitive(device, PrimitiveType, StartVertex, PrimitiveCount);
+}
+
+HRESULT WINAPI DrawIndexedPrimitive_Detour(IDirect3DDevice9* device,
+    D3DPRIMITIVETYPE PrimitiveType,
+    INT BaseVertexIndex,
+    UINT MinVertexIndex,
+    UINT NumVertices,
+    UINT StartIndex,
+    UINT PrimitiveCount) {
+    
+    auto& manager = RenderModeManager::Instance();
+    
+    // Log the draw call
+    RenderStateLogger::Instance().LogIndexedDrawCall(
+        device,
+        PrimitiveType,
+        BaseVertexIndex,
+        MinVertexIndex,
+        NumVertices,
+        StartIndex,
+        PrimitiveCount,
+        "DrawIndexedPrimitive");
+
+    return manager.m_originalDrawIndexedPrimitive(
+        device, PrimitiveType, BaseVertexIndex, MinVertexIndex,
+        NumVertices, StartIndex, PrimitiveCount);
 }
 
 HRESULT WINAPI SetVertexDeclaration_Detour(IDirect3DDevice9* device, IDirect3DVertexDeclaration9* decl) {
@@ -82,7 +131,10 @@ RenderModeManager::RenderModeManager()
     , m_initialized(false)
     , m_device(nullptr)
     , m_originalSetFVF(nullptr)
-    , m_originalSetVertexDeclaration(nullptr) {
+    , m_originalSetVertexDeclaration(nullptr)
+    , m_originalSetStreamSource(nullptr)
+    , m_originalDrawPrimitive(nullptr)
+    , m_originalDrawIndexedPrimitive(nullptr) {
     InitializeCriticalSection(&m_cs);
 }
 
@@ -202,6 +254,25 @@ void RenderModeManager::Initialize(IDirect3DDevice9* device) {
             m_originalSetStreamSource = setStreamHook->GetTrampoline<SetStreamSource_t>();
             setStreamHook->Enable();
             m_hooks.push_back(setStreamHook);
+
+            // Hook DrawPrimitive (index 81)
+            Msg("[RTX FVF] Setting up DrawPrimitive hook at index 81: %p\n", vTable[81]);
+            auto drawPrimHook = new Detouring::Hook();
+            Detouring::Hook::Target drawPrimTarget(&vTable[81]);
+            drawPrimHook->Create(drawPrimTarget, DrawPrimitive_Detour);
+            m_originalDrawPrimitive = drawPrimHook->GetTrampoline<DrawPrimitive_t>();
+            drawPrimHook->Enable();
+            m_hooks.push_back(drawPrimHook);
+
+            // Hook DrawIndexedPrimitive (index 82)
+            Msg("[RTX FVF] Setting up DrawIndexedPrimitive hook at index 82: %p\n", vTable[82]);
+            auto drawIdxPrimHook = new Detouring::Hook();
+            Detouring::Hook::Target drawIdxPrimTarget(&vTable[82]);
+            drawIdxPrimHook->Create(drawIdxPrimTarget, DrawIndexedPrimitive_Detour);
+            m_originalDrawIndexedPrimitive = drawIdxPrimHook->GetTrampoline<DrawIndexedPrimitive_t>();
+            drawIdxPrimHook->Enable();
+            m_hooks.push_back(drawIdxPrimHook);
+
         }
         catch (const std::exception& e) {
             LogMessage("Exception while creating hooks: %s\n", e.what());

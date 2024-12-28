@@ -30,7 +30,6 @@ public:
     void LogMaterialState(IMaterial* material, const char* context = "Unknown");
     void LogShaderState(IDirect3DVertexShader9* vshader, IDirect3DPixelShader9* pshader,
         const char* context = "Unknown");
-    void LogVertexFormat(DWORD fvf, const char* context = "Unknown");
 
     // Manual control
     void EnableLogging(bool enable) { m_loggingEnabled = enable; }
@@ -44,6 +43,7 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         m_logInterval = interval; 
     }
+    void LogVertexFormat(DWORD fvf, const char* context = "Unknown");
 
 private:
     RenderStateLogger() : m_device(nullptr), m_initialized(false), 
