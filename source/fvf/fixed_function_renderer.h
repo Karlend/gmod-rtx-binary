@@ -11,6 +11,14 @@ extern IMaterialSystem* materials;
 
 class FixedFunctionState;
 
+struct RenderStats {
+    int totalDrawCalls = 0;
+    int fixedFunctionDrawCalls = 0;
+    float lastStatsTime = 0.0f;
+    void Reset();
+    void LogIfNeeded();
+};
+
 class FixedFunctionRenderer {
 public:
     static FixedFunctionRenderer& Instance();
@@ -29,15 +37,6 @@ private:
     
     DrawIndexedPrimitive_t m_originalDrawIndexedPrimitive = nullptr;
     Detouring::Hook m_drawHook;
-
-    // Stats tracking
-    struct RenderStats {
-        int totalDrawCalls = 0;
-        int fixedFunctionDrawCalls = 0;
-        float lastStatsTime = 0.0f;
-        void Reset();
-        void LogIfNeeded();
-    } m_stats;
 
     // Main render function
     bool RenderWithFixedFunction(
@@ -60,4 +59,6 @@ private:
         UINT NumVertices,
         UINT StartIndex,
         UINT PrimitiveCount);
+
+        RenderStats m_stats;
 };

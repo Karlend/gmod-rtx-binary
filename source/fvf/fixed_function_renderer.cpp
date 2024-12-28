@@ -8,29 +8,22 @@
 #define FF_LOG(fmt, ...) Msg("[Fixed Function] " fmt "\n", ##__VA_ARGS__)
 #define FF_WARN(fmt, ...) Warning("[Fixed Function] " fmt "\n", ##__VA_ARGS__)
 
-// Statistics tracking
-struct RenderStats {
-    int totalDrawCalls;
-    int fixedFunctionDrawCalls;
-    float lastStatsTime;
+void RenderStats::Reset() {
+    totalDrawCalls = 0;
+    fixedFunctionDrawCalls = 0;
+    lastStatsTime = 0.0f;
+}
 
-    void Reset() {
-        totalDrawCalls = 0;
-        fixedFunctionDrawCalls = 0;
-        lastStatsTime = 0.0f;
+void RenderStats::LogIfNeeded() {
+    float currentTime = Plat_FloatTime();
+    if (currentTime - lastStatsTime > 5.0f) {  // Log every 5 seconds
+        FF_LOG("Stats - Total Draws: %d, FF Draws: %d (%.1f%%)",
+            totalDrawCalls, fixedFunctionDrawCalls,
+            totalDrawCalls > 0 ? (fixedFunctionDrawCalls * 100.0f / totalDrawCalls) : 0.0f);
+        Reset();
+        lastStatsTime = currentTime;
     }
-
-    void LogIfNeeded() {
-        float currentTime = Plat_FloatTime();
-        if (currentTime - lastStatsTime > 5.0f) {  // Log every 5 seconds
-            FF_LOG("Stats - Total Draws: %d, FF Draws: %d (%.1f%%)",
-                totalDrawCalls, fixedFunctionDrawCalls,
-                totalDrawCalls > 0 ? (fixedFunctionDrawCalls * 100.0f / totalDrawCalls) : 0.0f);
-            Reset();
-            lastStatsTime = currentTime;
-        }
-    }
-};
+}
 
 FixedFunctionRenderer& FixedFunctionRenderer::Instance() {
     static FixedFunctionRenderer instance;
