@@ -1,6 +1,8 @@
 #pragma once
 #include "materialsystem/imaterialsystem.h"
 #include "materialsystem/imaterial.h"
+#include "materialsystem/imaterialvar.h"
+#include "materialsystem/itexture.h"
 #include "tier0/dbg.h"
 
 /*

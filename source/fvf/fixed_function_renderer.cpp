@@ -344,6 +344,22 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
             format &= ~FF_VERTEX_NORMAL; // GUI doesn't need normals
         }
 
+
+        if (MaterialUtil::IsModelMaterial(material)) {
+            FF_LOG("Processing model material: %s", material->GetName());
+            format = FF_VERTEX_POSITION | 
+                    FF_VERTEX_NORMAL | 
+                    FF_VERTEX_COLOR | 
+                    FF_VERTEX_TEXCOORD0;
+
+            // Check for skinned mesh
+            IMaterialVar* boneVar = material->FindVar("$numbones", nullptr);
+            if (boneVar && boneVar->GetIntValue() > 0) {
+                FF_LOG("Adding bone weights for skinned mesh");
+                format |= FF_VERTEX_BONES | FF_VERTEX_BONEWEIGHT;
+            }
+        }
+
         // Check if we should use fixed function
         if (MaterialUtil::ShouldUseFixedFunction(material)) {
             instance.m_stats.fixedFunctionDrawCalls++;
