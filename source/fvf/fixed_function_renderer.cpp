@@ -5,6 +5,9 @@
 #include <tier0/dbg.h>
 #include "ff_logging.h"
 
+FixedFunctionRenderer::DrawIndexedPrimitive_t FixedFunctionRenderer::s_originalDrawIndexedPrimitive = nullptr;
+Detouring::Hook FixedFunctionRenderer::s_drawHook;
+
 void RenderStats::Reset() {
     totalDrawCalls = 0;
     fixedFunctionDrawCalls = 0;
@@ -37,33 +40,90 @@ void FixedFunctionRenderer::Initialize(IDirect3DDevice9* device) {
     m_device = device;
     m_stats.Reset();
     
-    // Get D3D9 vtable and hook DrawIndexedPrimitive
-    void** vftable = *reinterpret_cast<void***>(device);
-    if (!vftable) {
-        FF_WARN("Failed to get vtable");
-        return;
-    }
-    
-    FF_LOG("Got vtable: %p", vftable);
-    FF_LOG("DrawIndexedPrimitive offset: %p", &vftable[82]);
-    
     try {
-        // Hook DrawIndexedPrimitive
-        Detouring::Hook::Target target(&vftable[82]);
-        FF_LOG("Created hook target");
+        // Get vtable with error checking
+        if (IsBadReadPtr(device, sizeof(void*))) {
+            FF_WARN("Invalid device pointer");
+            return;
+        }
+
+        void** vftable = *reinterpret_cast<void***>(device);
+        if (!vftable || IsBadReadPtr(vftable, sizeof(void*) * 83)) {
+            FF_WARN("Invalid vtable pointer");
+            return;
+        }
         
-        m_drawHook.Create(target, DrawIndexedPrimitive_Detour);
-        FF_LOG("Created hook");
-        
-        m_originalDrawIndexedPrimitive = m_drawHook.GetTrampoline<DrawIndexedPrimitive_t>();
-        FF_LOG("Got trampoline: %p", m_originalDrawIndexedPrimitive);
-        
-        m_drawHook.Enable();
-        FF_LOG("Hook enabled");
+        FF_LOG("Got vtable: %p", vftable);
+
+        // Get DrawIndexedPrimitive function address
+        void* drawFunc = vftable[82];
+        if (!drawFunc || IsBadCodePtr(reinterpret_cast<FARPROC>(drawFunc))) {
+            FF_WARN("Invalid DrawIndexedPrimitive function pointer");
+            return;
+        }
+
+        FF_LOG("Original DrawIndexedPrimitive address: %p", drawFunc);
+
+        // Verify our detour function
+        if (IsBadCodePtr(reinterpret_cast<FARPROC>(DrawIndexedPrimitive_Detour))) {
+            FF_WARN("Invalid detour function pointer");
+            return;
+        }
+
+        FF_LOG("Detour function address: %p", static_cast<void*>(DrawIndexedPrimitive_Detour));
+
+        // Create hook
+        try {
+            Detouring::Hook::Target target(drawFunc);
+            FF_LOG("Created hook target");
+
+            s_drawHook.Create(
+                target,
+                reinterpret_cast<void*>(DrawIndexedPrimitive_Detour)
+            );
+            FF_LOG("Created hook");
+
+            // Get and verify trampoline
+            s_originalDrawIndexedPrimitive = s_drawHook.GetTrampoline<DrawIndexedPrimitive_t>();
+            if (!s_originalDrawIndexedPrimitive) {
+                FF_WARN("Failed to get trampoline function");
+                return;
+            }
+
+            FF_LOG("Got trampoline: %p", reinterpret_cast<void*>(s_originalDrawIndexedPrimitive));
+
+            // Enable hook
+            if (!s_drawHook.Enable()) {
+                FF_WARN("Failed to enable hook");
+                return;
+            }
+
+            FF_LOG("Hook enabled successfully");
+
+            // Verify hook is installed
+            void** newVTable = *reinterpret_cast<void***>(device);
+            void* newDrawFunc = newVTable[82];
+            FF_LOG("New DrawIndexedPrimitive address: %p", newDrawFunc);
+
+            if (newDrawFunc == drawFunc) {
+                FF_WARN("Hook installation verification failed - function not replaced");
+                return;
+            }
+        }
+        catch (const std::exception& e) {
+            FF_WARN("Exception during hook creation: %s", e.what());
+            return;
+        }
         
         // Create state manager
-        m_stateManager = std::make_unique<FixedFunctionState>();
-        FF_LOG("State manager created");
+        try {
+            m_stateManager = std::make_unique<FixedFunctionState>();
+            FF_LOG("State manager created");
+        }
+        catch (const std::exception& e) {
+            FF_WARN("Failed to create state manager: %s", e.what());
+            return;
+        }
         
         FF_LOG("Successfully initialized fixed function renderer");
     }
@@ -71,16 +131,20 @@ void FixedFunctionRenderer::Initialize(IDirect3DDevice9* device) {
         FF_WARN("Failed to initialize: %s", e.what());
         return;
     }
+    catch (...) {
+        FF_WARN("Unknown error during initialization");
+        return;
+    }
 }
 
 void FixedFunctionRenderer::Shutdown() {
-    if (m_drawHook.IsEnabled()) {
-        m_drawHook.Disable();
+    if (s_drawHook.IsEnabled()) {
+        s_drawHook.Disable();
     }
     
     m_stateManager.reset();
     m_device = nullptr;
-    m_originalDrawIndexedPrimitive = nullptr;
+    s_originalDrawIndexedPrimitive = nullptr;
     
     FF_LOG("Shutdown complete");
 }
@@ -144,15 +208,15 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
 {
     static bool first_call = true;
     if (first_call) {
-        Msg("[HOOK TEST] Draw hook called!\n");  // Use Msg directly for this test
-        FF_LOG("[HOOK TEST] Using FF_LOG");
-        OutputDebugStringA("[HOOK TEST] Draw hook called (OutputDebugString)\n");
+        FF_LOG("First draw call intercepted!");
+        FF_LOG("Device: %p", device);
+        FF_LOG("Original function: %p", s_originalDrawIndexedPrimitive);
         first_call = false;
     }
 
     auto& instance = Instance();
-    if (!instance.m_originalDrawIndexedPrimitive) {
-        FF_WARN("No original function!");
+    if (!s_originalDrawIndexedPrimitive) {
+        FF_WARN("No original function available!");
         return D3D_OK;
     }
 
@@ -172,7 +236,7 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     // If fixed function is disabled, use original path
     if (!instance.m_enabled) {
         FF_LOG("Fixed Function disabled, using original path");
-        return instance.m_originalDrawIndexedPrimitive(
+        return s_originalDrawIndexedPrimitive(
             device, PrimitiveType, BaseVertexIndex,
             MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
     }
@@ -181,7 +245,7 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     IMaterial* material = materials->GetRenderContext()->GetCurrentMaterial();
     if (!material) {
         FF_LOG("No material found, using original path");
-        return instance.m_originalDrawIndexedPrimitive(
+        return s_originalDrawIndexedPrimitive(
             device, PrimitiveType, BaseVertexIndex,
             MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
     }
@@ -220,7 +284,7 @@ HRESULT WINAPI FixedFunctionRenderer::DrawIndexedPrimitive_Detour(
     instance.m_stats.LogIfNeeded();
 
     FF_LOG("Using original render path");
-    return instance.m_originalDrawIndexedPrimitive(
+    return s_originalDrawIndexedPrimitive(
         device, PrimitiveType, BaseVertexIndex,
         MinVertexIndex, NumVertices, StartIndex, PrimitiveCount);
 }

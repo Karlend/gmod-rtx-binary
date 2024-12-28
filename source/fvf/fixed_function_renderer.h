@@ -42,8 +42,8 @@ private:
         IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, 
         UINT, UINT, UINT, UINT);
     
-    DrawIndexedPrimitive_t m_originalDrawIndexedPrimitive = nullptr;
-    Detouring::Hook m_drawHook;
+    static DrawIndexedPrimitive_t s_originalDrawIndexedPrimitive;
+    static Detouring::Hook s_drawHook;
 
     // Main render function
     bool RenderWithFixedFunction(
@@ -67,6 +67,9 @@ private:
         UINT StartIndex,
         UINT PrimitiveCount);
 
-        RenderStats m_stats;
-        bool m_enabled = false;
+    RenderStats m_stats;
+    bool m_enabled = false;
+
+    // Private constructor for singleton
+    FixedFunctionRenderer() = default;
 };
