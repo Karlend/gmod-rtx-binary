@@ -26,6 +26,7 @@ public:
         VertexFormat_t sourceFormat, 
         IMaterial* material,
         bool enabled);  // Add enabled parameter
+        
 
 private:
     struct TextureStageState {
@@ -40,10 +41,12 @@ private:
     };
 
     struct StoredState {
-        // Shaders
+        // Shaders and FVF
         IDirect3DVertexShader9* vertexShader = nullptr;
         IDirect3DPixelShader9* pixelShader = nullptr;
+        IDirect3DVertexBuffer9* vertexBuffer = nullptr;
         DWORD fvf = 0;
+        UINT stride = 0;
 
         // Matrices
         D3DMATRIX world;
@@ -60,7 +63,7 @@ private:
         DWORD srcBlend;
         DWORD destBlend;
 
-        // Texture stages (store state for each stage)
+        // Texture stages
         std::vector<TextureStageState> textureStages;
     };
 
