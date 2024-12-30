@@ -375,16 +375,16 @@ void FixedFunctionState::SetupFixedFunction(
         // Setup material
         D3DMATERIAL9 mtrl;
         ZeroMemory(&mtrl, sizeof(mtrl));
-        mtrl.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
-        mtrl.Ambient = D3DXCOLOR(0.5f, 0.5f, 0.5f, 1.0f);
+        mtrl.Diffuse = {1.0f, 1.0f, 1.0f, 1.0f};
+        mtrl.Ambient = {0.5f, 0.5f, 0.5f, 1.0f};
         device->SetMaterial(&mtrl);
 
         // Setup light
         D3DLIGHT9 light;
         ZeroMemory(&light, sizeof(light));
         light.Type = D3DLIGHT_DIRECTIONAL;
-        light.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
-        light.Direction = D3DXVECTOR3(0.0f, -1.0f, -1.0f);
+        light.Diffuse = {1.0f, 1.0f, 1.0f, 1.0f};
+        light.Direction = {0.0f, -1.0f, -1.0f};
         device->SetLight(0, &light);
         device->LightEnable(0, TRUE);
 
