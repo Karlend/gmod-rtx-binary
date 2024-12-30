@@ -29,9 +29,9 @@ void FixedFunctionState::SetupModelStates(IDirect3DDevice9* device, IMaterial* m
     }
 
     D3DMATERIAL9 mtrl = {};
-    mtrl.Diffuse = D3DXCOLOR(1.0f, 1.0f, 1.0f, 1.0f);
-    mtrl.Ambient = D3DXCOLOR(0.5f, 0.5f, 0.5f, 1.0f);
-    mtrl.Specular = D3DXCOLOR(0.2f, 0.2f, 0.2f, 1.0f);
+    mtrl.Diffuse = { 1.0f, 1.0f, 1.0f, 1.0f };
+    mtrl.Ambient = { 0.5f, 0.5f, 0.5f, 1.0f };
+    mtrl.Specular = { 0.2f, 0.2f, 0.2f, 1.0f };
     mtrl.Power = 8.0f;
     device->SetMaterial(&mtrl);
 }
@@ -206,8 +206,8 @@ bool FixedFunctionState::FindAndSetTexture(IDirect3DDevice9* device, IMaterial* 
         // Set a default material color
         D3DMATERIAL9 mtrl;
         ZeroMemory(&mtrl, sizeof(mtrl));
-        mtrl.Diffuse = D3DXCOLOR(0.7f, 0.7f, 0.7f, 1.0f);
-        mtrl.Ambient = D3DXCOLOR(0.3f, 0.3f, 0.3f, 1.0f);
+        mtrl.Diffuse = { 0.7f, 0.7f, 0.7f, 1.0f };
+        mtrl.Ambient = { 0.3f, 0.3f, 0.3f, 1.0f };
         device->SetMaterial(&mtrl);
 
         return false;
