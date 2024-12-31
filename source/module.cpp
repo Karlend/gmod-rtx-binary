@@ -10,6 +10,7 @@
 #include "rtx_lights/rtx_light_manager.h"
 #include "shader_fixes/shader_hooks.h"
 #include "prop_fixes.h" 
+#include "ivrenderview.h"
 
 #ifdef GMOD_MAIN
 extern IMaterialSystem* materials = NULL;
@@ -17,8 +18,35 @@ extern IMaterialSystem* materials = NULL;
 
 // extern IShaderAPI* g_pShaderAPI = NULL;
 remix::Interface* g_remix = nullptr;
+IVRenderView* g_pRenderView = nullptr;
+IVModelRender* g_pModelRender = nullptr;
 
 using namespace GarrysMod::Lua;
+
+
+LUA_FUNCTION(DisablePropCulling) {
+    try {
+        ModelRenderHooks::Instance().SetNoVisFlags(true);
+        Msg("[RTX Prop Fixes] Disabled prop culling\n");
+        return 0;
+    }
+    catch (...) {
+        Msg("[RTX Prop Fixes] Exception in DisablePropCulling\n");
+        return 0;
+    }
+}
+
+LUA_FUNCTION(EnablePropCulling) {
+    try {
+        ModelRenderHooks::Instance().SetNoVisFlags(false);
+        Msg("[RTX Prop Fixes] Enabled prop culling\n");
+        return 0;
+    }
+    catch (...) {
+        Msg("[RTX Prop Fixes] Exception in EnablePropCulling\n");
+        return 0;
+    }
+}
 
 LUA_FUNCTION(CreateRTXLight) {
     try {
@@ -187,6 +215,10 @@ GMOD_MODULE_OPEN() {
         ShaderAPIHooks::Instance().Initialize();
         ModelRenderHooks::Instance().Initialize();
 
+        // Disable culling by default
+        ModelRenderHooks::Instance().SetNoVisFlags(true);
+        Msg("[RTX Prop Fixes] Initial prop culling disabled\n");
+
         // Find Source's D3D9 device
         auto sourceDevice = static_cast<IDirect3DDevice9Ex*>(FindD3D9Device());
         if (!sourceDevice) {
@@ -216,6 +248,12 @@ GMOD_MODULE_OPEN() {
 
         // Register Lua functions
         LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB); 
+            LUA->PushCFunction(DisablePropCulling);
+            LUA->SetField(-2, "DisablePropCulling");
+
+            LUA->PushCFunction(EnablePropCulling);
+            LUA->SetField(-2, "EnablePropCulling");
+
             LUA->PushCFunction(CreateRTXLight);
             LUA->SetField(-2, "CreateRTXLight");
             
@@ -241,9 +279,9 @@ GMOD_MODULE_CLOSE() {
     try {
         Msg("[RTX] Shutting down module...\n");
 
-                // Shutdown shader protection
+        // Shutdown all systems
         ShaderAPIHooks::Instance().Shutdown();
-        
+        ModelRenderHooks::Instance().Shutdown();
         RTXLightManager::Instance().Shutdown();
 
         if (g_remix) {
