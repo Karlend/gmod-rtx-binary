@@ -5,12 +5,15 @@
 #include "e_utils.h"
 #include "materialsystem/imaterialsystem.h"
 #include "ivrenderview.h"
+#include "platform.h"
 
 // Define render flags directly here
 #define RTX_RENDER_FLAGS_FORCE_NO_VIS (1 << 0)
 #define RTX_RENDER_FLAGS_DISABLE_RENDERING_CACHE (1 << 1)
 #define RENDER_FLAGS_FORCE_NO_VIS RTX_RENDER_FLAGS_FORCE_NO_VIS
 #define RENDER_FLAGS_DISABLE_RENDERING_CACHE RTX_RENDER_FLAGS_DISABLE_RENDERING_CACHE
+
+bool IsValidPointer(const void* ptr);
 
 // Extended version of WorldListInfo_t with our additional field
 struct ExtendedWorldListInfo_t : public WorldListInfo_t
